@@ -1,6 +1,6 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, handInZone, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
+import { assignSlots, handInZone, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
 
@@ -9,7 +9,7 @@ const body = (cx: number, sw = 0.1, wrist = { x: cx, y: 0.5 }) => {
   const lm = Array.from({ length: 33 }, () => ({ x: cx, y: 0.5, z: 0, visibility: 1 }));
   lm[11] = { ...lm[11], x: cx + sw / 2 };
   lm[12] = { ...lm[12], x: cx - sw / 2 };
-  lm[15] = { ...lm[15], ...wrist };
+  for (const k of [15, 17, 19]) lm[k] = { ...lm[k], ...wrist }; // the whole hand: wrist and both knuckles
   return lm;
 };
 
@@ -49,6 +49,19 @@ for (let k = 0; k < 120; k++) { out = still.next(0.5 + (k % 2 ? 0.02 : -0.02), 1
 assert.ok(spread < 0.02 / 3, `jitter only reduced to ${spread}`);
 for (let k = 0; k < 30; k++) out = fast.next(k / 10, 1 / 30); // 3 zone-units per second
 assert.ok(2.9 - out < 0.25, `lagging ${2.9 - out} behind a fast hand`);
+
+// Prediction: a hand moving right at 2 units/s, read 70ms ago, is drawn ahead of its reading — but never past maxLead.
+const moving = { x: 0, y: 0, vx: 3, vy: 0, seen: true, t: 1000 };
+assert.ok(Math.abs(predict(moving, 1070).x - 3 * (0.07 + tuning.lookahead)) < 1e-9);
+assert.ok(Math.abs(predict(moving, 9000).x - 3 * tuning.maxLead) < 1e-9);
+assert.equal(predict({ ...moving, vx: 0.4 }, 1070).x, 0); // a hand that is barely moving is left exactly where it was read: no wobble
+
+// The palm: a blend of wrist and knuckles, so one noisy point moves it by only its share; hidden points drop out.
+const hand = body(0.5);
+hand[19] = { ...hand[19], x: 0.6 };
+assert.ok(Math.abs(palm(hand, 15).x - 0.53) < 1e-9);
+hand[19] = { ...hand[19], visibility: 0 };
+assert.ok(Math.abs(palm(hand, 15).x - 0.5) < 1e-9);
 
 // Streak: consecutive goal-days, still alive if today hasn't been played yet.
 const at = (daysAgo: number, points: number) =>

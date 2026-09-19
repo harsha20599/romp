@@ -18,10 +18,14 @@ body { background: var(--night); color: var(--ink); font: 500 1.4rem/1.4 Fredoka
 .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
 .col { display: flex; flex-direction: column; gap: 1rem; }
 
-/* ---- Backdrop: your own mirror image, tinted, under drifting neon blobs and rising shapes ---- */
-video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.2; }
+/* ---- The camera picture is never shown in play (the presence figure stands in for it) — but it must stay in the
+   render tree, 2px and all but transparent, or the browser stops delivering its frames to the tracker. ---- */
+video.mirror { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0.01; object-fit: cover; transform: scaleX(-1); pointer-events: none; }
+video.mirror.bright { inset: 0; width: 100%; height: 100%; opacity: 0.85; }
+.label { min-width: 9rem; color: var(--ink-soft); }
 .backdrop { position: fixed; inset: 0; pointer-events: none; overflow: hidden; background: linear-gradient(160deg, rgba(18, 10, 46, 0.9), rgba(45, 16, 84, 0.72) 55%, rgba(18, 10, 46, 0.92)); }
-.backdrop.ingame { background: rgba(10, 6, 28, 0.55); }
+.backdrop.ingame { background: linear-gradient(180deg, rgba(14, 8, 38, 0.82), rgba(38, 14, 74, 0.7)); }
+.backdrop.ingame .blob { opacity: 0.28; }
 .blob { position: absolute; width: 60vw; height: 60vw; border-radius: 50%; opacity: 0.5; animation: drift 22s ease-in-out infinite alternate; }
 .blob.a { left: -20vw; top: -30vw; background: radial-gradient(circle, rgba(255, 77, 141, 0.55), transparent 62%); }
 .blob.b { right: -25vw; top: -10vw; background: radial-gradient(circle, rgba(61, 225, 255, 0.45), transparent 62%); animation-duration: 28s; animation-delay: -8s; }
@@ -57,8 +61,9 @@ button:focus-visible { outline: 0.2rem solid var(--cyan); outline-offset: 0.2rem
 button.ghost { font-size: 1.15rem; padding: 0.7rem 1.2rem; color: var(--ink-soft); }
 button.primary { background: linear-gradient(135deg, var(--pink), var(--orange)); border-color: rgba(255, 255, 255, 0.5); font-size: 1.7rem; padding: 1.1rem 3rem; text-shadow: 0 0.12rem 0 rgba(0, 0, 0, 0.25); }
 button.primary:hover, button.primary.hot { background: linear-gradient(135deg, #ff6aa0, #ffb566); }
-button.giant { font-size: 2.6rem; padding: 1.4rem 5.5rem; border-radius: 2rem; animation: pulse 1.6s ease-in-out infinite; }
-@keyframes pulse { 50% { box-shadow: 0 0.35rem 0 rgba(0, 0, 0, 0.35), 0 0 0 1.2rem rgba(255, 77, 141, 0.16), 0 0 3.5rem rgba(255, 140, 80, 0.55); } }
+button.giant { position: relative; font-size: 2.6rem; padding: 1.4rem 5.5rem; border-radius: 2rem; }
+button.giant::before { content: ''; position: absolute; inset: -0.2rem; border-radius: inherit; border: 0.3rem solid var(--orange); animation: pulse 1.6s ease-out infinite; pointer-events: none; }
+@keyframes pulse { from { transform: scale(1); opacity: 0.8; } to { transform: scale(1.18, 1.45); opacity: 0; } }
 
 .seg { display: inline-flex; gap: 0.4rem; padding: 0.4rem; border-radius: 1.5rem; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--panel-line); }
 .seg button { border-color: transparent; background: transparent; box-shadow: none; border-radius: 1.1rem; }
@@ -86,14 +91,14 @@ button.giant { font-size: 2.6rem; padding: 1.4rem 5.5rem; border-radius: 2rem; a
 /* ---- Game tiles ---- */
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.1rem; }
 button.card {
-  position: relative; overflow: hidden; text-align: left; min-width: 0; min-height: 10.2rem; padding: 1.1rem 1.3rem; border-radius: 1.7rem; border: 0.18rem solid rgba(255, 255, 255, 0.28);
+  position: relative; overflow: hidden; text-align: left; min-width: 0; min-height: 12.6rem; padding: 1.2rem 1.4rem; border-radius: 1.7rem; border: 0.18rem solid rgba(255, 255, 255, 0.28);
   background: linear-gradient(140deg, var(--a), var(--b)); display: flex; flex-direction: column; justify-content: flex-end; gap: 0.15rem;
   animation: card-in 480ms var(--bounce) both; animation-delay: calc(var(--i) * 45ms);
 }
 @keyframes card-in { from { opacity: 0; transform: translateY(2.5rem) scale(0.9); } }
-button.card b { font-size: 1.9rem; font-weight: 700; line-height: 1; text-shadow: 0 0.15rem 0 rgba(0, 0, 0, 0.3); }
+button.card b { font-size: 2.1rem; font-weight: 700; line-height: 1; text-shadow: 0 0.15rem 0 rgba(0, 0, 0, 0.3); }
 button.card small { font-size: 1rem; font-weight: 500; color: rgba(255, 255, 255, 0.92); line-height: 1.25; }
-button.card .icon { position: absolute; right: 0.6rem; top: 0.3rem; font-size: 4.4rem; line-height: 1; transform: rotate(8deg); transition: transform 300ms var(--bounce); filter: drop-shadow(0 0.3rem 0 rgba(0, 0, 0, 0.25)); }
+button.card .icon { position: absolute; right: 0.7rem; top: 0.4rem; font-size: 5.6rem; line-height: 1; transform: rotate(8deg); transition: transform 300ms var(--bounce); filter: drop-shadow(0 0.3rem 0 rgba(0, 0, 0, 0.25)); }
 button.card .meta { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem; font-size: 1rem; }
 button.card .pill { background: rgba(0, 0, 0, 0.32); border-radius: 1rem; padding: 0.05rem 0.65rem; font-weight: 600; }
 button.card::after { content: ''; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, 0.4) 50%, transparent 65%); transform: translateX(-120%); }
@@ -104,12 +109,12 @@ button.card:hover::after, button.card.hot::after { transform: translateX(120%); 
 .stars { color: var(--yellow); letter-spacing: 0.06em; text-shadow: 0 0.12rem 0 rgba(0, 0, 0, 0.35); } .stars i { color: rgba(255, 255, 255, 0.28); font-style: normal; text-shadow: none; }
 
 /* ---- Briefing ---- */
-.brief { display: grid; grid-template-columns: 21rem 1fr; gap: 2.2rem; align-items: start; }
-.hero { border-radius: 2.2rem; aspect-ratio: 1; display: grid; place-items: center; font-size: 12rem; background: linear-gradient(140deg, var(--a), var(--b)); border: 0.25rem solid rgba(255, 255, 255, 0.4); box-shadow: 0 0.8rem 0 rgba(0, 0, 0, 0.3), 0 0 4rem var(--a); }
+.brief { display: grid; grid-template-columns: 25rem 1fr; gap: 2.2rem; align-items: start; }
+.hero { border-radius: 2.2rem; aspect-ratio: 1; display: grid; place-items: center; font-size: 14rem; background: linear-gradient(140deg, var(--a), var(--b)); border: 0.25rem solid rgba(255, 255, 255, 0.4); box-shadow: 0 0.8rem 0 rgba(0, 0, 0, 0.3), 0 0 4rem var(--a); }
 .hero span { animation: bob 2.4s ease-in-out infinite; filter: drop-shadow(0 0.6rem 0 rgba(0, 0, 0, 0.25)); }
 @keyframes bob { 50% { transform: translateY(-7%) rotate(-5deg); } }
 .steps { display: flex; flex-direction: column; gap: 0.5rem; }
-.steps p { display: flex; gap: 0.8rem; align-items: baseline; font-size: 1.35rem; animation: screen-in 400ms var(--bounce) both; animation-delay: calc(var(--i) * 90ms + 150ms); }
+.steps p { display: flex; gap: 0.8rem; align-items: baseline; font-size: 1.65rem; animation: screen-in 400ms var(--bounce) both; animation-delay: calc(var(--i) * 90ms + 150ms); }
 .steps p::before { content: counter(step); counter-increment: step; flex: none; width: 2rem; height: 2rem; border-radius: 50%; display: grid; place-items: center; font-size: 1.1rem; font-weight: 700; background: var(--a); color: #14093a; }
 .steps { counter-reset: step; }
 .path { display: flex; align-items: center; gap: 0; }
@@ -164,3 +169,16 @@ th { color: var(--ink-dim); font-weight: 500; font-size: 1rem; } td.lead, .lead 
 /* ---- Pause ---- */
 .pause { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(10, 6, 28, 0.72); animation: screen-in 250ms ease-out both; }
 .pause .panel { align-items: center; text-align: center; gap: 1.2rem; padding: 2.4rem 3.4rem; border-width: 0.2rem; border-color: var(--cyan); }
+
+/* Cursor in fist mode: an open ring while the hand is open, a solid gold disc the instant it closes. */
+.cursor.fist { background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 14%, transparent 16%), conic-gradient(rgba(255, 255, 255, 0.55) 360deg, transparent 0); transition: scale 120ms var(--bounce); }
+.cursor.closed { scale: 0.6; background: var(--yellow); -webkit-mask: none; mask: none; box-shadow: 0 0 2.5rem var(--yellow); }
+
+/* ---- Presence: where the camera sees you, as a stick figure in a little frame ---- */
+.presence { position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%); display: flex; align-items: center; gap: 1rem; pointer-events: none; z-index: 4; }
+.presence canvas { width: 12rem; height: 6.75rem; border-radius: 1rem; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--panel-line); }
+.presence span { font-size: 1.2rem; font-weight: 600; color: var(--yellow); }
+.presence span:empty { display: none; }
+.presence.small { left: 1.2rem; bottom: 1rem; transform: none; opacity: 0.6; }
+.presence.small canvas { width: 6.4rem; height: 3.6rem; border-radius: 0.6rem; }
+.presence.small span { font-size: 1rem; }
