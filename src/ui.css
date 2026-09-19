@@ -51,6 +51,8 @@ th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
 /* Game stage: fixed 16:9, letterboxed on any display. */
 .stage { position: fixed; inset: 0; margin: auto; width: min(100vw, 100vh * 16 / 9); height: min(100vh, 100vw * 9 / 16); }
 .hud { position: absolute; top: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #000; }
+.hud.flash { inset: 0; top: 0; opacity: 0; pointer-events: none; }
+.hud.big { top: 38%; left: 50%; transform: translate(-50%, -50%); font-size: 12rem; line-height: 1; }
 .hud.clock { left: 50%; transform: translateX(-50%); font-size: 3.2rem; }
 .hud.score { font-size: 2.8rem; }
 .hud.hint { top: 6.2rem; font-size: 2rem; color: var(--ink); }

@@ -22,6 +22,11 @@ const POSES: number[][] = [
   [180, 180, 0, 0, -150, -90, -30, -90], // wide squat
   [135, 135, -45, -45, ...LEGS], // diagonal
   [100, 95, 80, 85, -135, -130, -85, -90], // up, left leg out
+  [180, 180, 0, 0, -95, -90, -45, -50], // T, right leg out
+  [45, 45, 135, 135, ...LEGS], // arms crossed overhead
+  [180, 90, -45, -135, ...LEGS], // one goalpost, one on hip
+  [135, 135, 45, 45, -150, -90, -30, -90], // Y over a wide squat
+  [-100, -95, 80, 85, -95, -90, -40, -120], // right arm up, right knee up
 ].map((pose) => pose.map((deg) => deg * D));
 const STAND = [-100, -95, -80, -85, ...LEGS].map((deg) => deg * D);
 const ROUND = 8 * PER_POSE;
@@ -40,13 +45,15 @@ function poseFigure(limbs: (THREE.Mesh | null)[], angles: number[]) {
     y += Math.sin(a) * LENGTHS[i];
   });
 }
-function Figure({ limbs, color, opacity }: { limbs: React.RefObject<(THREE.Mesh | null)[]>; color: string; opacity: number }) {
-  const mat = <meshBasicMaterial color={color} transparent opacity={opacity} />;
+const torsoGeo = new THREE.PlaneGeometry(1.5, 2.2), headGeo = new THREE.CircleGeometry(0.42, 24);
+const targetMat = new THREE.MeshBasicMaterial({ color: '#fbbf24', transparent: true, opacity: 0.55 });
+const myMat = new THREE.MeshBasicMaterial({ color: PLAYER_COLORS[0], transparent: true, opacity: 0.9 });
+function Figure({ limbs, material }: { limbs: React.RefObject<(THREE.Mesh | null)[]>; material: THREE.Material }) {
   return (
     <>
-      {LENGTHS.map((len, i) => <mesh key={i} ref={(m) => void (limbs.current[i] = m)} geometry={limbGeo} scale-x={len}>{mat}</mesh>)}
-      <mesh position={[0, 1, 0]}><planeGeometry args={[1.5, 2.2]} />{mat}</mesh>
-      <mesh position={[0, 2.75, 0]}><circleGeometry args={[0.42, 24]} />{mat}</mesh>
+      {LENGTHS.map((len, i) => <mesh key={i} ref={(m) => void (limbs.current[i] = m)} geometry={limbGeo} material={material} scale-x={len} />)}
+      <mesh position={[0, 1, 0]} geometry={torsoGeo} material={material} />
+      <mesh position={[0, 2.75, 0]} geometry={headGeo} material={material} />
     </>
   );
 }
@@ -71,13 +78,16 @@ function Scene({ onEnd, hud }: GameProps & { hud: Hud }) {
 
     if (t < 0) return hud('h0', 'Match the shape');
     if (flying) {
-      if (into > PER_POSE - SHOW - 0.6) g.best = Math.max(g.best, match(mine, pose)); // best moment of the last 0.6s counts
-      hud('h0', '');
+      const now = match(mine, pose);
+      if (into > PER_POSE - SHOW - 0.6) g.best = Math.max(g.best, now); // best moment of the last 0.6s counts
+      hud('h0', `${now}%`); // live, so you can feel your way into the shape
+      targetMat.color.set(now >= 80 ? '#4ade80' : now >= 50 ? '#fbbf24' : '#f87171');
     } else if (g.judged !== i) {
       g.judged = i;
       g.score += g.best;
-      hud('h0', `${g.best}%`);
+      hud('h0', g.best >= 90 ? `Perfect! ${g.best}%` : `${g.best}%`);
       blip(g.best >= 60 ? 660 : 140, 0.2);
+      if (g.best < 40) hud.flash('#ef4444');
       g.best = 0;
     }
     hud('s0', players[0].present ? String(g.score) : 'Step into view');
@@ -85,8 +95,8 @@ function Scene({ onEnd, hud }: GameProps & { hud: Hud }) {
 
   return (
     <group position-y={-0.9} scale={0.95}>
-      <group ref={target} position-z={-1}><Figure limbs={targetLimbs} color="#fbbf24" opacity={0.55} /></group>
-      <Figure limbs={myLimbs} color={PLAYER_COLORS[0]} opacity={0.9} />
+      <group ref={target} position-z={-1}><Figure limbs={targetLimbs} material={targetMat} /></group>
+      <Figure limbs={myLimbs} material={myMat} />
     </group>
   );
 }

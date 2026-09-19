@@ -1,17 +1,20 @@
 // Dodge — obstacles rush down a track: jump the low bar, duck the high bar, lean away from the half-walls.
-// Everything is a vertical move or a lean, so two tracks side by side still fit a narrow room.
+// Coin rows are a bonus, never a penalty: lean into them. Everything is a vertical move or a lean,
+// so two tracks side by side still fit a narrow room.
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { players, tuning } from './pose.ts';
-import { PLAYER_COLORS, Stage, blip, scoreHud, useRound, type GameProps, type Hud } from './stage.tsx';
+import { PLAYER_COLORS, Stage, blip, comboText, scoreHud, useBursts, useRound, type GameProps, type Hud } from './stage.tsx';
 
-const ROUND = 75, FAR = -60, WINDOW = 1.6, TRACK_W = 5, PER_TRACK = 8, STRIPES = 10;
+const ROUND = 75, FAR = -60, WINDOW = 1.6, TRACK_W = 5, PER_TRACK = 8, STRIPES = 10, PYLONS = 8;
 const KINDS = {
   jump: { hint: 'Jump', color: '#fbbf24', size: [4.6, 0.5, 0.5], at: [0, 0.25], ok: (lift: number, _lean: number) => lift > tuning.jump },
   duck: { hint: 'Duck', color: '#22d3ee', size: [4.6, 0.7, 0.5], at: [0, 2.05], ok: (lift: number, _lean: number) => lift < tuning.crouch },
   left: { hint: 'Lean right', color: '#f43f5e', size: [2.4, 2.6, 0.5], at: [-1.2, 1.3], ok: (_lift: number, lean: number) => lean > tuning.leanOver },
   right: { hint: 'Lean left', color: '#f43f5e', size: [2.4, 2.6, 0.5], at: [1.2, 1.3], ok: (_lift: number, lean: number) => lean < -tuning.leanOver },
+  coinsL: { hint: 'Coins left', color: '#fde047', size: [0.5, 0.5, 4], at: [-1.3, 1.1], ok: (_lift: number, lean: number) => lean < -tuning.leanOver },
+  coinsR: { hint: 'Coins right', color: '#fde047', size: [0.5, 0.5, 4], at: [1.3, 1.1], ok: (_lift: number, lean: number) => lean > tuning.leanOver },
 } as const;
 type Kind = keyof typeof KINDS;
 const KIND_NAMES = Object.keys(KINDS) as Kind[];
@@ -27,6 +30,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
   const obs = useMemo<Ob[][]>(() => Array.from({ length: n }, () => Array.from({ length: PER_TRACK }, () => ({ live: false, kind: 'jump' as Kind, z: 0, cleared: false }))), [n]);
   const obMeshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial> | null)[]>([]);
   const stripes = useRef<(THREE.Mesh | null)[]>([]);
+  const bursts = useBursts();
   const avatars = useRef<(THREE.Group | null)[]>([]);
   const bodies = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial> | null)[]>([]);
   const g = useRef({ spawnIn: 1, scores: [0, 0], combo: [0, 0], hurt: [0, 0] }).current;
@@ -56,9 +60,13 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
           if (o.z < -WINDOW && (!next || o.z > next.z)) next = o;
           if (o.z >= WINDOW) {
             o.live = false;
+            const coins = o.kind.startsWith('coins'), ax = avatars.current[p]?.position.x ?? trackX(p);
             if (!pl.present) { /* nobody on this track */ }
-            else if (o.cleared) { g.scores[p] += 1 + Math.floor(++g.combo[p] / 5); blip(520 + 40 * Math.min(g.combo[p], 12)); }
-            else { g.combo[p] = 0; g.hurt[p] = 0.4; blip(90, 0.3); }
+            else if (o.cleared) {
+              g.scores[p] += (coins ? 3 : 1) + Math.floor(++g.combo[p] / 5);
+              blip((coins ? 880 : 520) + 40 * Math.min(g.combo[p], 12));
+              bursts.burst(ax, 1.2, 0, coins ? '#fde047' : '#4ade80', coins ? 24 : 10, 5);
+            } else if (!coins) { g.combo[p] = 0; g.hurt[p] = 0.4; blip(90, 0.3); hud.flash('#ef4444'); bursts.burst(ax, 1.2, 0, '#ef4444', 24, 8); }
           }
         }
         const k = KINDS[o.kind];
@@ -66,8 +74,10 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
         m.position.set(trackX(p) + k.at[0], k.at[1], o.z);
         m.scale.set(k.size[0], k.size[1], k.size[2]);
         m.material.color.set(k.color);
+        m.material.emissive.set(o.kind.startsWith('coins') ? '#a16207' : '#000000');
+        if (o.kind.startsWith('coins')) m.rotation.z += dt * 4; else m.rotation.z = 0;
       }
-      hud(`h${p}` as 'h0', next ? KINDS[next.kind].hint : '');
+      hud.p('h', p, next ? KINDS[next.kind].hint : comboText(g.combo[p]));
 
       // The avatar mirrors the body, so you can see what the game thinks you are doing.
       const a = avatars.current[p], body = bodies.current[p];
@@ -83,6 +93,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
     }
 
     stripes.current.forEach((s) => s && (s.position.z = ((s.position.z - FAR + speed * dt) % -FAR) + FAR));
+    bursts.update(dt);
     scoreHud(hud, n, g.scores);
   });
 
@@ -106,6 +117,15 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
             <mesh position-y={1.85}><sphereGeometry args={[0.32, 16, 12]} /><meshLambertMaterial color="#fafafa" /></mesh>
           </group>
         </group>
+      ))}
+      <fog attach="fog" args={['#09090b', 25, 62]} />
+      {bursts.node}
+      {/* Pylons along the outer edges ride the same conveyor as the stripes — they are what sells the speed. */}
+      {Array.from({ length: PYLONS * 2 }, (_, i) => (
+        <mesh key={`py${i}`} ref={(m) => void (stripes.current[STRIPES * n + i] = m)} geometry={box} scale={[0.3, 2.4, 0.3]}
+          position={[(i % 2 ? 1 : -1) * ((n === 1 ? 0 : (TRACK_W + 1.5) / 2) + TRACK_W / 2 + 0.8), 1.2, FAR + (Math.floor(i / 2) * -FAR) / PYLONS]}>
+          <meshLambertMaterial color="#4f46e5" emissive="#312e81" />
+        </mesh>
       ))}
       {Array.from({ length: STRIPES * n }, (_, i) => (
         <mesh key={i} ref={(m) => void (stripes.current[i] = m)} position={[trackX(i % n), 0, FAR + (Math.floor(i / n) * -FAR) / STRIPES]} rotation-x={-Math.PI / 2}>

@@ -26,21 +26,31 @@ type Mode = keyof typeof MODES;
 type Run = { game: Game; turn: number; scores: number[]; points: number[] };
 type Screen = { at: 'start' | 'home' | 'stats' } | ({ at: 'play' | 'next' | 'results' } & Run);
 
-// The pointer is P1's higher visible hand; holding it over a button for DWELL ms clicks it.
-const DWELL = 1200;
+// The pointer is P1's higher hand; holding it over a button for DWELL ms clicks it. Three things keep it calm:
+// it glides instead of jumping, it only switches hands when the other is clearly higher, and once it is
+// dwelling on a button it stays "on" it until it leaves by a margin — so a wobble never resets the ring.
+const DWELL = 1200, STICKY = 40;
 function HandCursor() {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    let raf = 0, target: Element | null = null, since = 0;
+    let raf = 0, target: HTMLButtonElement | null = null, since = 0, last = 0, which = 1, x = NaN, y = NaN;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      const hand = players[0].hands.filter((h) => h.seen).sort((a, b) => b.y - a.y)[0];
-      const on = players[0].present && !!hand;
+      const dt = Math.min(0.05, (now - last) / 1000), hands = players[0].hands;
+      last = now;
+      const other = 1 - which;
+      if (hands[other].seen && (!hands[which].seen || hands[other].y > hands[which].y + 0.3)) which = other;
+      const hand = hands[which], on = players[0].present && hand.seen;
       el.current!.style.display = on ? '' : 'none';
-      if (!on) return;
-      const x = ((hand.x + 1) / 2) * innerWidth, y = ((1 - hand.y) / 2) * innerHeight;
+      if (!on) return void (x = NaN);
+      const tx = ((hand.x + 1) / 2) * innerWidth, ty = ((1 - hand.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 12);
+      x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
+      y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
       el.current!.style.transform = `translate(${x}px, ${y}px)`;
-      const over = document.elementFromPoint(x, y)?.closest('button') ?? null;
+
+      const r = target?.isConnected ? target.getBoundingClientRect() : null;
+      const held = r && x > r.left - STICKY && x < r.right + STICKY && y > r.top - STICKY && y < r.bottom + STICKY;
+      const over = held ? target : (document.elementFromPoint(x, y)?.closest('button:not(:disabled)') as HTMLButtonElement | null);
       if (over !== target) {
         target?.classList.remove('hot');
         over?.classList.add('hot');
@@ -49,7 +59,7 @@ function HandCursor() {
       }
       const p = target ? Math.min(1, Math.max(0, (now - since) / DWELL)) : 0;
       el.current!.style.setProperty('--p', String(p));
-      if (p === 1) { (target as HTMLButtonElement).click(); since = now + DWELL; } // pause before it can re-fire
+      if (p === 1) { target!.click(); since = now + DWELL; } // pause before it can re-fire
     };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); target?.classList.remove('hot'); };
