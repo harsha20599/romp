@@ -16,6 +16,8 @@ Everything under `public/assets/` is **CC0 (public domain)** — no attribution 
 
 The music is not a recording: it is generated live by `src/audio.ts`.
 
+Models: MediaPipe pose_landmarker (lite, full) and hand_landmarker — Google, Apache 2.0.
+
 Libraries: three.js, React Three Fiber, drei, @react-three/rapier (Rapier physics), @react-three/postprocessing, MediaPipe Tasks Vision.
 
 To add more assets: drop files in `public/assets/…`; for sounds, re-run the index one-liner in `README.md`.

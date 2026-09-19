@@ -18,9 +18,10 @@ body { background: var(--night); color: var(--ink); font: 500 1.4rem/1.4 Fredoka
 .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
 .col { display: flex; flex-direction: column; gap: 1rem; }
 
-/* ---- Backdrop: your own mirror image, tinted, under drifting neon blobs and rising shapes ---- */
-video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.2; }
-video.mirror.bright { opacity: 0.85; }
+/* ---- The camera picture is never shown in play (the presence figure stands in for it) — but it must stay in the
+   render tree, 2px and all but transparent, or the browser stops delivering its frames to the tracker. ---- */
+video.mirror { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0.01; object-fit: cover; transform: scaleX(-1); pointer-events: none; }
+video.mirror.bright { inset: 0; width: 100%; height: 100%; opacity: 0.85; }
 .label { min-width: 9rem; color: var(--ink-soft); }
 .backdrop { position: fixed; inset: 0; pointer-events: none; overflow: hidden; background: linear-gradient(160deg, rgba(18, 10, 46, 0.9), rgba(45, 16, 84, 0.72) 55%, rgba(18, 10, 46, 0.92)); }
 .backdrop.ingame { background: linear-gradient(180deg, rgba(14, 8, 38, 0.82), rgba(38, 14, 74, 0.7)); }
@@ -60,8 +61,9 @@ button:focus-visible { outline: 0.2rem solid var(--cyan); outline-offset: 0.2rem
 button.ghost { font-size: 1.15rem; padding: 0.7rem 1.2rem; color: var(--ink-soft); }
 button.primary { background: linear-gradient(135deg, var(--pink), var(--orange)); border-color: rgba(255, 255, 255, 0.5); font-size: 1.7rem; padding: 1.1rem 3rem; text-shadow: 0 0.12rem 0 rgba(0, 0, 0, 0.25); }
 button.primary:hover, button.primary.hot { background: linear-gradient(135deg, #ff6aa0, #ffb566); }
-button.giant { font-size: 2.6rem; padding: 1.4rem 5.5rem; border-radius: 2rem; animation: pulse 1.6s ease-in-out infinite; }
-@keyframes pulse { 50% { box-shadow: 0 0.35rem 0 rgba(0, 0, 0, 0.35), 0 0 0 1.2rem rgba(255, 77, 141, 0.16), 0 0 3.5rem rgba(255, 140, 80, 0.55); } }
+button.giant { position: relative; font-size: 2.6rem; padding: 1.4rem 5.5rem; border-radius: 2rem; }
+button.giant::before { content: ''; position: absolute; inset: -0.2rem; border-radius: inherit; border: 0.3rem solid var(--orange); animation: pulse 1.6s ease-out infinite; pointer-events: none; }
+@keyframes pulse { from { transform: scale(1); opacity: 0.8; } to { transform: scale(1.18, 1.45); opacity: 0; } }
 
 .seg { display: inline-flex; gap: 0.4rem; padding: 0.4rem; border-radius: 1.5rem; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--panel-line); }
 .seg button { border-color: transparent; background: transparent; box-shadow: none; border-radius: 1.1rem; }
@@ -167,3 +169,15 @@ th { color: var(--ink-dim); font-weight: 500; font-size: 1rem; } td.lead, .lead 
 /* ---- Pause ---- */
 .pause { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(10, 6, 28, 0.72); animation: screen-in 250ms ease-out both; }
 .pause .panel { align-items: center; text-align: center; gap: 1.2rem; padding: 2.4rem 3.4rem; border-width: 0.2rem; border-color: var(--cyan); }
+
+/* Cursor in fist mode: an open ring while the hand is open, a solid gold disc the instant it closes. */
+.cursor.fist { background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 14%, transparent 16%), conic-gradient(rgba(255, 255, 255, 0.55) 360deg, transparent 0); transition: scale 120ms var(--bounce); }
+.cursor.closed { scale: 0.6; background: var(--yellow); -webkit-mask: none; mask: none; box-shadow: 0 0 2.5rem var(--yellow); }
+
+/* ---- Presence: where the camera sees you, as a stick figure in a little frame, bottom-left on every screen ---- */
+.presence { position: fixed; left: 1.2rem; bottom: 0.7rem; display: flex; align-items: center; gap: 0.8rem; pointer-events: none; z-index: 4; }
+.presence canvas { width: 7rem; height: 3.94rem; border-radius: 0.7rem; background: rgba(0, 0, 0, 0.4); border: 1px solid var(--panel-line); }
+.presence span { font-size: 1.15rem; font-weight: 600; color: var(--yellow); text-shadow: 0 0.12rem 0 rgba(0, 0, 0, 0.5); }
+.presence span:empty { display: none; }
+.presence.small { opacity: 0.65; }
+.presence.small canvas { width: 5.6rem; height: 3.15rem; }
