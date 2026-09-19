@@ -1,0 +1,134 @@
+// Goalie — real ballistics (Rapier). Shots are rigid bodies fired on an arc at a spot in your goal; your gloves are
+// kinematic colliders, so a save is a real deflection — swat it and it flies, just get there and it drops.
+// A shot that crosses the line is a goal. Hands are body-relative across your own goal: together-play is compact.
+import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { BallCollider, CuboidCollider, Physics, RigidBody, type RapierRigidBody } from '@react-three/rapier';
+import * as THREE from 'three';
+import { hardness } from './meta.ts';
+import { sim } from './pose.ts';
+import { PLAYER_COLORS, Stage, comboText, hitSound, music, scoreHud, sfx, useBursts, useHands, useRound, type GameProps, type Hud } from './stage.tsx';
+
+const ROUND = 60, FAR = -32, GRAV = 9.8, BALL_R = 0.5, GLOVE_R = 0.85, PER_ZONE = 5, FLOOR = -3.2;
+const ballGeo = new THREE.IcosahedronGeometry(BALL_R, 1), ringGeo = new THREE.RingGeometry(0.9, 1, 40);
+
+type Shot = { state: 'off' | 'in' | 'saved' | 'goal'; zone: number; tx: number; ty: number; left: number; dur: number; gold: boolean; age: number };
+
+function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const hard = hardness(stage);
+  const goal = useMemo(() => ({ cx: (p: number) => (n === 1 ? 0 : (p - 0.5) * 6.8), hw: n === 1 ? 5.6 : 3, hh: 3, cy: 0.2 }), [n]);
+  const shots = useMemo<Shot[]>(() => Array.from({ length: PER_ZONE * n }, (_, i) => ({ state: 'off', zone: i % n, tx: 0, ty: 0, left: 0, dur: 1, gold: false, age: 0 })), [n]);
+  const bodies = useRef<(RapierRigidBody | null)[]>([]), gloves = useRef<(RapierRigidBody | null)[]>([]);
+  const ballMeshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null)[]>([]);
+  const rings = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null)[]>([]);
+  const g = useRef({ spawnIn: [1, 1.5], scores: [0, 0], combo: [0, 0] }).current;
+  const hands = useHands(n, goal), bursts = useBursts();
+  if (sim) Object.assign(window, { __goalie: { shots, goal, g } }); // test hook: lets a headless run aim the glove at the ring
+  const tick = useRound(hud, ROUND, () => { music.stop(); onEnd(g.scores.slice(0, n)); });
+  useLayoutEffect(() => { music.start('arcade'); return () => music.stop(); }, []);
+
+  useFrame((_, rawDt) => {
+    const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
+    if (t === null) return;
+    const ease = Math.max(0, t) / ROUND;
+
+    hands.update(dt).forEach((h, i) => gloves.current[i]?.setNextKinematicTranslation({ x: h.on ? h.x : 0, y: h.on ? h.y : -40, z: 0.2 }));
+
+    if (t >= 0)
+      for (let z = 0; z < n; z++) {
+        if ((g.spawnIn[z] -= dt) > 0) continue;
+        g.spawnIn[z] = (1.8 - 0.8 * ease + Math.random() * 0.3) / Math.sqrt(hard);
+        const i = shots.findIndex((s) => s.zone === z && s.state === 'off'), body = bodies.current[i];
+        if (i < 0 || !body) continue;
+        const s = shots[i], x0 = goal.cx(z) + (Math.random() * 2 - 1) * 7, y0 = FLOOR + BALL_R;
+        Object.assign(s, { state: 'in', gold: Math.random() < 0.15, age: 0, tx: goal.cx(z) + (Math.random() * 2 - 1) * goal.hw * 0.82, ty: goal.cy + (Math.random() * 2 - 1) * goal.hh * 0.8 });
+        s.dur = s.left = (s.gold ? 1.25 : 1.7 - 0.5 * ease) / Math.sqrt(hard);
+        // Solve the launch velocity that lands the ball on (tx, ty, 0) after `dur` seconds under gravity.
+        body.setEnabled(true);
+        body.setTranslation({ x: x0, y: y0, z: FAR }, true);
+        body.setLinvel({ x: (s.tx - x0) / s.dur, y: (s.ty - y0) / s.dur + 0.5 * GRAV * s.dur, z: -FAR / s.dur }, true);
+        body.setAngvel({ x: -8, y: 0, z: Math.random() * 6 - 3 }, true);
+        sfx('impactPunch_medium', { vol: 0.35, rate: 0.7 }); // the kick, far away
+      }
+
+    shots.forEach((s, i) => {
+      const body = bodies.current[i], mesh = ballMeshes.current[i], ring = rings.current[i];
+      if (!body || !mesh || !ring) return;
+      if (s.state === 'off' && body.isEnabled()) body.setEnabled(false); // parked bodies must not fall forever
+      if (s.state !== 'off') {
+        const pos = body.translation(), vel = body.linvel(), p = s.zone;
+        s.left -= dt; s.age += dt;
+        if (s.state === 'in' && pos.z > 1.4) { // over the line
+          s.state = 'goal'; g.combo[p] = 0;
+          sfx('error', { vol: 0.7 }); hud.flash('#ef4444'); hud.shake(0.7);
+        } else if (s.state === 'in' && pos.z > -6 && vel.z < 1) { // turned back, or killed dead, this side of the box
+          s.state = 'saved';
+          g.scores[p] += (s.gold ? 3 : 1) + Math.floor(++g.combo[p] / 5);
+          hitSound('impactPunch_heavy', g.combo[p]);
+          bursts.burst(pos.x, pos.y, pos.z + 0.5, s.gold ? '#fde047' : PLAYER_COLORS[p], s.gold ? 30 : 16, 8);
+        }
+        if (s.age > s.dur + 2.2 || pos.y < -12) { s.state = 'off'; body.setEnabled(false); }
+        mesh.position.set(pos.x, pos.y, pos.z);
+        const r = body.rotation();
+        mesh.quaternion.set(r.x, r.y, r.z, r.w);
+        mesh.material.color.set(s.gold ? '#fde047' : '#fafafa');
+        mesh.material.emissive.set(s.gold ? '#a16207' : '#000000');
+      }
+      mesh.visible = s.state !== 'off';
+      ring.visible = s.state === 'in';
+      ring.position.set(s.tx, s.ty, 0);
+      ring.scale.setScalar(GLOVE_R * (1 + 2.2 * Math.max(0, s.left / s.dur))); // closes to glove size as the ball arrives
+      ring.material.opacity = 0.25 + 0.75 * (1 - Math.max(0, s.left / s.dur));
+      ring.material.color.set(s.gold ? '#fde047' : '#fafafa');
+    });
+    bursts.update(dt);
+    music.intensity(0.3 + Math.max(g.combo[0], g.combo[1]) / 12);
+    scoreHud(hud, n, g.scores);
+    for (let p = 0; p < n; p++) hud.p('h', p, comboText(g.combo[p]));
+  });
+
+  return (
+    <>
+      <fog attach="fog" args={['#09090b', 18, 46]} />
+      <mesh position={[0, FLOOR, -20]} rotation-x={-Math.PI / 2}><planeGeometry args={[44, 60]} /><meshLambertMaterial color="#166534" /></mesh>
+      <Physics gravity={[0, -GRAV, 0]}>
+        <RigidBody type="fixed" colliders={false}>
+          <CuboidCollider args={[30, 0.5, 40]} position={[0, FLOOR - 0.5, -20]} restitution={0.6} friction={0.8} />
+          {Array.from({ length: n }, (_, p) => [-1, 1].map((side) => (
+            <CuboidCollider key={`${p}${side}`} args={[0.15, goal.hh + 0.3, 0.15]} position={[goal.cx(p) + side * (goal.hw + 0.3), goal.cy, 0]} restitution={0.5} />
+          )))}
+          {Array.from({ length: n }, (_, p) => <CuboidCollider key={p} args={[goal.hw + 0.4, 0.15, 0.15]} position={[goal.cx(p), goal.cy + goal.hh + 0.4, 0]} restitution={0.5} />)}
+        </RigidBody>
+        {shots.map((_, i) => (
+          <RigidBody key={i} ref={(b) => void (bodies.current[i] = b)} colliders={false} ccd enabledRotations={[true, true, true]} linearDamping={0.05} position={[0, -30 - i, 0]}>
+            <BallCollider args={[BALL_R]} restitution={0.75} friction={0.4} density={0.6} />
+          </RigidBody>
+        ))}
+        {Array.from({ length: n * 2 }, (_, i) => (
+          <RigidBody key={i} ref={(b) => void (gloves.current[i] = b)} type="kinematicPosition" colliders={false} position={[0, -40, 0.2]}>
+            <BallCollider args={[GLOVE_R]} restitution={0.4} />
+          </RigidBody>
+        ))}
+      </Physics>
+      {Array.from({ length: n }, (_, p) => (
+        <group key={p} position-x={goal.cx(p)}>
+          {[[-goal.hw - 0.3, goal.cy, 0.3, goal.hh * 2 + 0.6], [goal.hw + 0.3, goal.cy, 0.3, goal.hh * 2 + 0.6], [0, goal.cy + goal.hh + 0.4, goal.hw * 2 + 0.9, 0.3]].map(([x, y, w, h], k) => (
+            <mesh key={k} position={[x, y, 0]} scale={[w, h, 0.3]}><boxGeometry /><meshStandardMaterial color="#e4e4e7" emissive="#e4e4e7" emissiveIntensity={0.25} /></mesh>
+          ))}
+        </group>
+      ))}
+      {shots.map((_, i) => (
+        <group key={i}>
+          <mesh ref={(m) => void (ballMeshes.current[i] = m as never)} geometry={ballGeo} visible={false}><meshStandardMaterial flatShading /></mesh>
+          <mesh ref={(m) => void (rings.current[i] = m as never)} geometry={ringGeo} visible={false}><meshBasicMaterial transparent /></mesh>
+        </group>
+      ))}
+      {hands.nodes}
+      {bursts.node}
+    </>
+  );
+}
+
+export default (props: GameProps) => (
+  <Stage n={props.n} camera={{ position: [0, 0.4, 9.5], fov: 50, near: 0.1, far: 120 }}>{(hud) => <Scene {...props} hud={hud} />}</Stage>
+);

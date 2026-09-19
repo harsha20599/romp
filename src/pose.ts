@@ -29,6 +29,7 @@ export const tuning = {
   crouch: -0.6, // lift below this = ducking
   leanOver: 0.3, // |lean| above this = leaning
   handUp: 0.5, // hand y above this = raised
+  freezeStill: 1.5, // Freeze: movement rate (shoulder-widths of limb travel per second) that counts as "you moved"
   standBand: 0.25, // |lift| inside this counts as "standing"; the baseline follows it slowly
   energyDeadband: 0.05, // per-landmark travel (shoulder-widths/frame) ignored as jitter
   energyPerPoint: 12, // shoulder-widths of summed limb travel per activity point

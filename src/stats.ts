@@ -1,5 +1,6 @@
 // Profiles, sessions, activity points, streaks — localStorage on the tablet, nothing leaves it.
-export type Session = { t: number; game: string; who: string; score: number; points: number };
+// stage/stars/xp arrived with the progression layer; sessions saved before it simply lack them.
+export type Session = { t: number; game: string; who: string; score: number; points: number; stage?: number; stars?: number; xp?: number };
 type Db = { profiles: string[]; sessions: Session[] };
 
 const KEY = 'romp.v1';
@@ -12,7 +13,7 @@ export const save = (db: Db) => localStorage.setItem(KEY, JSON.stringify(db));
 const day = (t: number) => new Date(t).toLocaleDateString('en-CA'); // local YYYY-MM-DD
 
 export function summary(sessions: Session[], who: string, now = Date.now()) {
-  const mine = sessions.filter((s) => s.who === who);
+  const mine = sessions.filter((s) => s.who === who && !s.game.startsWith('bonus:')); // bonus rows carry XP only
   const byDay = new Map<string, number>();
   for (const s of mine) byDay.set(day(s.t), (byDay.get(day(s.t)) ?? 0) + s.points);
   const best: Record<string, number> = {};

@@ -1,11 +1,12 @@
 // Beat — moves fall to the line in time with the music: left up, right up, both up, squat, jump.
 // Each move has its own lane and shape; landing it close to the beat is "Perfect" and scores double.
 // All vertical, so it is compact. The clock is the AudioContext's, so notes and sound cannot drift apart.
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { players, tuning, type Player } from './pose.ts';
-import { COUNTDOWN, H, Stage, audio, blip, comboText, countdown, drumLoop, scoreHud, useBursts, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { hardness } from './meta.ts';
+import { COUNTDOWN, H, Stage, audio, comboText, countdown, hitSound, music, say, scoreHud, useBursts, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const BPM = 104, BEAT = 60 / BPM, ROUND = 60, FALL = 2.4; // FALL = seconds a note is on screen before its beat
 const HIT_Y = -2.8, WINDOW = 0.26, PERFECT = 0.11; // seconds either side of the beat
@@ -21,9 +22,9 @@ const MOVES = [
 ];
 
 // One move every two beats, then every beat for the second half; never the same move twice running.
-const chart = () => {
+const chart = (hard: number) => {
   const notes: { at: number; move: number; best: number[]; judged: boolean }[] = [];
-  for (let b = 4, last = -1; b * BEAT < ROUND - 1; b += b * BEAT < ROUND / 2 ? 2 : 1) {
+  for (let b = 4, last = -1; b * BEAT < ROUND - 1; b += b * BEAT < ROUND / 2 / hard ? 2 : 1) {
     let move = Math.floor(Math.random() * MOVES.length);
     if (move === last) move = (move + 1) % MOVES.length;
     notes.push({ at: b * BEAT, move: (last = move), best: [Infinity, Infinity], judged: false });
@@ -31,13 +32,13 @@ const chart = () => {
   return notes;
 };
 
-function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
-  const notes = useMemo(chart, []);
+function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const notes = useMemo(() => chart(hardness(stage)), [stage]);
   const meshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null)[]>([]);
   const lines = useRef<(THREE.Mesh | null)[]>([]);
   const bursts = useBursts();
   const g = useRef({ start: audio().currentTime + COUNTDOWN, scores: [0, 0], combo: [0, 0], said: ['', ''], saidUntil: [0, 0], done: false, last: 0 }).current;
-  const drums = useMemo(() => drumLoop(BPM, g.start), [g]);
+  useLayoutEffect(() => { music.start('beat', g.start, 0.6); return () => music.stop(); }, [g]); // the band starts on the game's beat zero
   const laneX = (p: number, lane: number) => zoneX(n, p) + lane * zoneHalf(n) * 0.55;
 
   useFrame(() => {
@@ -45,8 +46,8 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
     const t = audio().currentTime - g.start, dt = Math.min(0.05, t - g.last);
     g.last = t;
     countdown(hud, t, ROUND);
-    if (t >= ROUND) { g.done = true; blip(880, 0.4); return onEnd(g.scores.slice(0, n)); }
-    drums.tick(t);
+    if (t >= ROUND) { g.done = true; music.stop(); say('time_over'); return onEnd(g.scores.slice(0, n)); }
+    music.intensity(0.5 + Math.max(g.combo[0], g.combo[1]) / 20);
 
     const pulse = 1 + 0.6 * Math.max(0, 1 - ((((t % BEAT) + BEAT) % BEAT) / BEAT) * 3); // the line kicks on every beat
     lines.current.forEach((l) => l?.scale.set(1, pulse, 1));
@@ -71,7 +72,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
         const perfect = note.best[p] < PERFECT;
         if (note.best[p] < Infinity) {
           g.scores[p] += (perfect ? 2 : 1) + Math.floor(++g.combo[p] / 5);
-          blip(perfect ? 1320 : 880, 0.05, 'triangle');
+          hitSound(perfect ? 'select' : 'click', g.combo[p], 0.6);
           bursts.burst(laneX(p, move.lane), HIT_Y, 0.5, move.color, perfect ? 24 : 10);
         } else g.combo[p] = 0;
         g.said[p] = note.best[p] < Infinity ? (perfect ? 'Perfect!' : 'Good') : 'Miss';
