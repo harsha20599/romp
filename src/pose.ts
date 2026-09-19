@@ -2,7 +2,8 @@
 // Games read the mutable `players` array every frame; nothing here touches React.
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision';
 
-export type Hand = { x: number; y: number; seen: boolean }; // -1..1 inside the player's own zone, y up
+// x, y: -1..1 inside the player's own zone, y up. vx, vy: zone-units per second, measured at camera rate.
+export type Hand = { x: number; y: number; vx: number; vy: number; seen: boolean };
 export type Player = {
   present: boolean;
   hands: [Hand, Hand]; // [screen-left, screen-right]
@@ -18,6 +19,12 @@ export const tuning = {
   reachY: 1.4, // same, vertically
   centerY: 0.2, // zone centre sits this many shoulder-widths above the shoulder line
   minVis: 0.5, // landmark visibility below this = not seen
+  // One-Euro smoothing: `calm` is the cutoff (Hz) for a still hand — lower = steadier but laggier;
+  // `quick` is how fast the cutoff opens up with speed — higher = less lag on fast swings.
+  handCalm: 1.2, handQuick: 3,
+  bodyCalm: 0.8, bodyQuick: 1.5, // shoulder frame (position + width) the hands are measured against
+  liftCalm: 2.5, liftQuick: 3, // jump / crouch / lean signals
+  handHold: 0.25, // seconds a hand keeps its last position after tracking loses it — stops flicker
   jump: 0.3, // lift above this = in the air
   crouch: -0.6, // lift below this = ducking
   leanOver: 0.3, // |lean| above this = leaning
@@ -30,7 +37,7 @@ export const tuning = {
 
 const mkPlayer = (): Player => ({
   present: false,
-  hands: [{ x: 0, y: 0, seen: false }, { x: 0, y: 0, seen: false }],
+  hands: [{ x: 0, y: 0, vx: 0, vy: 0, seen: false }, { x: 0, y: 0, vx: 0, vy: 0, seen: false }],
   energy: 0,
   lift: 0,
   lean: 0,
@@ -68,8 +75,8 @@ export function bodyFrame(lm: NormalizedLandmark[], aspect: number) {
 
 // The narrow-room rule: a hand is read relative to its owner's shoulders, in shoulder-widths,
 // with gain — never as a position in the camera frame.
-export function handInZone(lm: NormalizedLandmark[], wrist: number, aspect: number, n: number): Hand {
-  const f = bodyFrame(lm, aspect), w = lm[wrist];
+export function handInZone(lm: NormalizedLandmark[], wrist: number, aspect: number, n: number, f = bodyFrame(lm, aspect)) {
+  const w = lm[wrist];
   const clamp = (v: number) => Math.max(-1, Math.min(1, v));
   return {
     x: clamp((mx(w, aspect) - f.x) / f.sw / tuning.reachX[n - 1]),
@@ -102,26 +109,66 @@ export function assignSlots(poses: NormalizedLandmark[][], aspect: number, n: nu
     .map((p) => p.lm);
 }
 
+// One-Euro filter (Casiez et al.): heavy smoothing when still, almost none when moving fast.
+export class OneEuro {
+  x = NaN; dx = 0; calm; quick;
+  constructor(calm: () => number, quick: () => number) { this.calm = calm; this.quick = quick; }
+  next(v: number, dt: number) {
+    if (Number.isNaN(this.x)) return (this.x = v);
+    const alpha = (cutoff: number) => { const r = 2 * Math.PI * cutoff * dt; return r / (r + 1); };
+    this.dx += alpha(1) * ((v - this.x) / dt - this.dx);
+    return (this.x += alpha(this.calm() + this.quick() * Math.abs(this.dx)) * (v - this.x));
+  }
+  reset() { this.x = NaN; this.dx = 0; }
+}
+const euro = (kind: 'hand' | 'body' | 'lift') => new OneEuro(() => tuning[`${kind}Calm`], () => tuning[`${kind}Quick`]);
+const mkFilters = () => ({
+  fx: euro('body'), fy: euro('body'), sw: euro('body'), lift: euro('lift'), lean: euro('lift'),
+  hands: [0, 1].map(() => ({ x: euro('hand'), y: euro('hand'), lost: 0 })),
+});
+const filters = [mkFilters(), mkFilters()];
+const resetFilters = (F: ReturnType<typeof mkFilters>) =>
+  [F.fx, F.fy, F.sw, F.lift, F.lean, ...F.hands.flatMap((h) => [h.x, h.y])].forEach((f) => f.reset());
+
 const prev: (NormalizedLandmark[] | null)[] = [null, null];
+let lastApply = 0;
 // Each player's own standing shoulder height: learned while they stand, re-learned if they walk to a new spot.
 const stand = [{ y: NaN, since: 0 }, { y: NaN, since: 0 }];
 function apply(poses: NormalizedLandmark[][], aspect: number) {
-  const slots = assignSlots(poses, aspect, nPlayers);
+  const slots = assignSlots(poses, aspect, nPlayers), now = performance.now();
+  const dt = Math.min(0.2, Math.max(1e-3, (now - lastApply) / 1000));
+  lastApply = now;
   players.forEach((pl, i) => {
-    const lm = slots[i];
+    const lm = slots[i], F = filters[i], st = stand[i];
     pl.present = !!lm;
-    if (!lm) return void ((prev[i] = null), (stand[i].y = NaN));
-    WRISTS.forEach((w, h) => (pl.hands[h] = handInZone(lm, w, aspect, nPlayers)));
-    const was = prev[i], f = bodyFrame(lm, aspect), sw = f.sw, st = stand[i], now = performance.now();
-    if (Number.isNaN(st.y)) st.y = f.y;
-    pl.lift = (st.y - f.y) / sw;
-    if (Math.abs(pl.lift) < tuning.standBand) { st.y += (f.y - st.y) * 0.02; st.since = now; }
-    else if (now - st.since > 4000) st.y = f.y; // out of band for 4s = they moved, not a 4s squat
-    pl.lean = leanOf(lm, aspect);
+    if (!lm) return void ((prev[i] = null), (st.y = NaN), resetFilters(F));
+
+    // The shoulder frame is smoothed harder than the hands: its noise is multiplied into every hand reading.
+    const raw = bodyFrame(lm, aspect);
+    const f = { x: F.fx.next(raw.x, dt), y: F.fy.next(raw.y, dt), sw: F.sw.next(raw.sw, dt) };
+    WRISTS.forEach((w, h) => {
+      const hf = F.hands[h], r = handInZone(lm, w, aspect, nPlayers, f);
+      if (r.seen) {
+        hf.lost = 0;
+        pl.hands[h] = { x: hf.x.next(r.x, dt), y: hf.y.next(r.y, dt), vx: hf.x.dx, vy: hf.y.dx, seen: true };
+      } else if ((hf.lost += dt) > tuning.handHold) {
+        pl.hands[h] = { ...pl.hands[h], vx: 0, vy: 0, seen: false };
+        hf.x.reset(); hf.y.reset();
+      }
+    });
+
+    if (Number.isNaN(st.y)) st.y = raw.y;
+    const lift = (st.y - raw.y) / f.sw;
+    if (Math.abs(lift) < tuning.standBand) { st.y += (raw.y - st.y) * 0.02; st.since = now; }
+    else if (now - st.since > 4000) st.y = raw.y; // out of band for 4s = they moved, not a 4s squat
+    pl.lift = F.lift.next(lift, dt);
+    pl.lean = F.lean.next(leanOf(lm, aspect), dt);
     pl.angles = limbAngles(lm, aspect);
+
+    const was = prev[i];
     if (was)
       for (const k of ENERGY_POINTS) {
-        const d = Math.hypot((lm[k].x - was[k].x) * aspect, lm[k].y - was[k].y) / sw;
+        const d = Math.hypot((lm[k].x - was[k].x) * aspect, lm[k].y - was[k].y) / f.sw;
         if (d > tuning.energyDeadband && d < 1) pl.energy += d; // d >= 1 is a slot swap, not movement
       }
     prev[i] = lm;
@@ -167,18 +214,25 @@ function startSim() {
       pl.present = true;
       pl.lift = keys.has('ArrowUp') ? 0.6 : keys.has('ArrowDown') ? -1 : 0;
       pl.lean = keys.has('ArrowRight') ? 0.6 : keys.has('ArrowLeft') ? -0.6 : 0;
-      pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, seen: true };
-      if (keys.has('d') || e.key === 'd') pl.hands[1] = { x: 0.5, y: keys.has('d') ? 0.8 : -0.5, seen: true };
+      pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, vx: 0, vy: 0, seen: true };
+      if (keys.has('d') || e.key === 'd') pl.hands[1] = { x: 0.5, y: keys.has('d') ? 0.8 : -0.5, vx: 0, vy: 0, seen: true };
     }
   };
   addEventListener('keydown', body);
   addEventListener('keyup', body);
+  let lastMove = 0;
   addEventListener('pointermove', (e) => {
-    const hand = { x: (e.clientX / innerWidth) * 2 - 1, y: 1 - (e.clientY / innerHeight) * 2, seen: true };
+    const now = performance.now(), dt = Math.max(1e-3, (now - lastMove) / 1000);
+    lastMove = now;
+    const x = (e.clientX / innerWidth) * 2 - 1, y = 1 - (e.clientY / innerHeight) * 2;
     for (const pl of players.slice(0, nPlayers)) {
-      pl.energy += Math.hypot(hand.x - pl.hands[1].x, hand.y - pl.hands[1].y);
+      const was = pl.hands[1];
+      pl.energy += Math.hypot(x - was.x, y - was.y);
       pl.present = true;
-      pl.hands[1] = hand;
+      pl.hands[1] = { x, y, vx: (x - was.x) / dt, vy: (y - was.y) / dt, seen: true };
     }
   });
+  setInterval(() => { // a mouse at rest sends no events, so its last velocity would stick
+    if (performance.now() - lastMove > 60) for (const pl of players) pl.hands[1] = { ...pl.hands[1], vx: 0, vy: 0 };
+  }, 30);
 }
