@@ -20,6 +20,8 @@ body { background: var(--night); color: var(--ink); font: 500 1.4rem/1.4 Fredoka
 
 /* ---- Backdrop: your own mirror image, tinted, under drifting neon blobs and rising shapes ---- */
 video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.2; }
+video.mirror.bright { opacity: 0.85; }
+.label { min-width: 9rem; color: var(--ink-soft); }
 .backdrop { position: fixed; inset: 0; pointer-events: none; overflow: hidden; background: linear-gradient(160deg, rgba(18, 10, 46, 0.9), rgba(45, 16, 84, 0.72) 55%, rgba(18, 10, 46, 0.92)); }
 .backdrop.ingame { background: linear-gradient(180deg, rgba(14, 8, 38, 0.82), rgba(38, 14, 74, 0.7)); }
 .backdrop.ingame .blob { opacity: 0.28; }

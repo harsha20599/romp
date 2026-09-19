@@ -40,7 +40,7 @@ const MODES = { solo: 'Solo', together: 'Together', turns: 'Take turns' } as con
 type Mode = keyof typeof MODES;
 type Reward = { stars: number; xp: number; newBest: boolean; levelUp: number; badges: string[]; challenges: string[] };
 type Round = { game: Game; stage: number; turn: number; scores: number[]; points: number[]; rewards: Reward[] };
-type Screen = { at: 'start' | 'home' | 'stats' | 'badges' } | { at: 'brief'; game: Game; stage: number } | ({ at: 'play' | 'next' | 'results' } & Round);
+type Screen = { at: 'start' | 'home' | 'stats' | 'badges' | 'tracking' } | { at: 'brief'; game: Game; stage: number } | ({ at: 'play' | 'next' | 'results' } & Round);
 
 const vars = (v: Record<string, string | number>) => v as CSSProperties; // CSS custom properties for inline style
 const toneOf = (g: Game) => vars({ '--a': g.tone[0], '--b': g.tone[1] });
@@ -72,6 +72,38 @@ function Player({ sessions, who, tone }: { sessions: Session[]; who: string; ton
       </span>
     </span>
   );
+}
+
+// What the tracker actually sees: shoulders, hips and both palms drawn over the live picture, each palm with a
+// short trail — hold a hand still and the size of the scribble IS the tracking noise.
+function TrackingView() {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const trails: number[][][] = [[], [], [], []];
+    let raf = requestAnimationFrame(function draw() {
+      raf = requestAnimationFrame(draw);
+      const c = canvas.current!, video = document.querySelector('video')!, g = c.getContext('2d')!;
+      c.width = innerWidth; c.height = innerHeight;
+      // The picture is shown with object-fit: cover, so frame coordinates map through the same crop.
+      const k = Math.max(c.width / (video.videoWidth || 1), c.height / (video.videoHeight || 1));
+      const at = ([x, y]: number[]) => [(x - 0.5) * video.videoWidth * k + c.width / 2, (y - 0.5) * video.videoHeight * k + c.height / 2];
+      players.forEach((pl, i) => {
+        if (!pl.present || !pl.debug.length) return void (trails[i * 2].length = trails[i * 2 + 1].length = 0);
+        const [ls, rs, lh, rh, lp, rp] = pl.debug.map(at);
+        g.strokeStyle = g.fillStyle = PLAYER_COLORS[i]; g.lineWidth = 5; g.lineJoin = 'round';
+        g.beginPath(); g.moveTo(ls[0], ls[1]); g.lineTo(rs[0], rs[1]); g.lineTo(rh[0], rh[1]); g.lineTo(lh[0], lh[1]); g.closePath(); g.stroke();
+        [lp, rp].forEach((palm, h) => {
+          const trail = trails[i * 2 + h];
+          if (!pl.hands[h].seen) return void (trail.length = 0);
+          trail.push(palm); if (trail.length > 45) trail.shift();
+          g.lineWidth = 3; g.strokeStyle = '#ffe14d'; g.beginPath(); trail.forEach(([x, y], n) => (n ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+          g.fillStyle = '#ffe14d'; g.beginPath(); g.arc(palm[0], palm[1], 14, 0, 7); g.fill();
+        });
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return <canvas ref={canvas} style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }} />;
 }
 
 function CountUp({ to }: { to: number }) {
@@ -178,6 +210,8 @@ function App() {
     setScreen(s);
   };
   const chooseMode = (m: Mode) => { setMode(m); setPlayers(m === 'together' ? 2 : 1); };
+  // Tracker settings live in localStorage and are read when the tracker starts, so changing one restarts the app.
+  const setTracker = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } location.reload(); };
   const toggleFx = () => { effects.on = !fx; setFx(!fx); try { localStorage.setItem('romp.fx', fx ? 'off' : 'on'); } catch { /* private mode */ } };
   const start = async () => {
     // Fullscreen first: it needs the tap's user-activation, which is gone once the camera prompt and model load finish.
@@ -235,8 +269,8 @@ function App() {
   const party = screen.at === 'results' && screen.rewards.some((r) => r.stars === 3 || r.levelUp || r.newBest);
   return (
     <Shell.Provider value={shell}>
-      <video className="mirror" ref={video} muted playsInline />
-      <Backdrop ingame={screen.at === 'play'} />
+      <video className={screen.at === 'tracking' ? 'mirror bright' : 'mirror'} ref={video} muted playsInline />
+      {screen.at !== 'tracking' && <Backdrop ingame={screen.at === 'play'} />}
       {screen.at === 'start' && (
         <div className="screen" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '2rem' }}>
           <Logo huge />
@@ -254,6 +288,7 @@ function App() {
             <Logo />
             <p className="dim num grow" style={{ paddingLeft: '1rem' }}><Fps /></p>
             <button className="ghost" onClick={toggleFx}>✨ Glow {fx ? 'on' : 'off'}</button>
+            <button className="ghost" onClick={() => go({ at: 'tracking' })}>🎯 Tracking</button>
             <button className="ghost" onClick={() => go({ at: 'badges' })}>🏅 Badges</button>
             <button className="ghost" onClick={() => go({ at: 'stats' })}>📊 Stats</button>
           </div>
@@ -371,6 +406,32 @@ function App() {
             <button className="primary" onClick={() => play(screen.game, screen.stage)}>Play again</button>
             {screen.stage < open(screen.game) && <button onClick={() => play(screen.game, screen.stage + 1)}>Next stage →</button>}
             <button onClick={() => go({ at: 'home' })}>Home</button>
+          </div>
+        </div>
+      )}
+      {screen.at === 'tracking' && (
+        <div className="screen">
+          <TrackingView />
+          <div className="row"><h1 className="grow">🎯 Tracking</h1><button className="ghost" onClick={() => go({ at: 'home' })}>← Back</button></div>
+          <div className="panel" style={{ maxWidth: '46rem' }}>
+            <p className="num"><Fps /></p>
+            <p className="dim num">Camera {track.camera || '—'}</p>
+            <p className="dim">Hold a hand still: the yellow scribble behind the dot is the tracking noise. Wave fast: a smeared, lagging trail means motion blur — add light, or try Sharp motion.</p>
+            <div className="row">
+              <span className="label">Model</span>
+              <div className="seg">
+                <button aria-pressed={tuning.model === 'full'} onClick={() => setTracker('romp.model', 'full')}>Precise</button>
+                <button aria-pressed={tuning.model === 'lite'} onClick={() => setTracker('romp.model', 'lite')}>Fast</button>
+              </div>
+            </div>
+            <div className="row">
+              <span className="label">Sharp motion</span>
+              <div className="seg">
+                <button aria-pressed={!tuning.sharp} onClick={() => setTracker('romp.sharp', 'off')}>Off</button>
+                <button aria-pressed={tuning.sharp} onClick={() => setTracker('romp.sharp', 'on')}>On</button>
+              </div>
+              <span className="dim">Short exposure. Needs a bright room.</span>
+            </div>
           </div>
         </div>
       )}
