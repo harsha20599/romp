@@ -1,6 +1,6 @@
 // What every game shares: the 16:9 stage + HUD, the round clock, sound, and the players' hands.
 // R3F rules kept here: nothing per-frame goes through React state; HUD is DOM text written via refs.
-import { Suspense, useMemo, useRef, type ReactNode } from 'react';
+import { Suspense, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
 import { Canvas, type CameraProps } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
@@ -18,6 +18,10 @@ export const effects = { on: (() => { try { return localStorage.getItem('romp.fx
 type HudKey = 'clock' | 'big' | 's0' | 's1' | 'h0' | 'h1';
 export type Hud = ((key: HudKey, text: string) => void) & { flash: (color: string) => void; shake: (amount?: number) => void; p: (kind: 's' | 'h', p: number, text: string) => void };
 
+// The shell's hook into a running game: a tap or click anywhere on the stage asks to pause, and while paused the
+// frame loop stops (so every game's clock stops with it). Context, so no game has to know any of this exists.
+export const Shell = createContext({ paused: false, pause: () => {} });
+
 // A player's zone on the orthographic stage: the whole width solo, a half each together.
 export const zoneHalf = (n: number) => W / 2 / n;
 export const zoneX = (n: number, p: number) => (n === 1 ? 0 : (p - 0.5) * (W / 2));
@@ -28,6 +32,8 @@ export function Stage({ n, camera, children }: { n: number; camera?: CameraProps
     const set = (key: string, text: string) => {
       if (shown.current[key] === text || !els.current[key]) return;
       els.current[key]!.textContent = shown.current[key] = text;
+      // New words pop. `scale` (not `transform`) so the centring transforms on these elements are left alone.
+      if (text && key !== 'clock' && !key.startsWith('s')) els.current[key]!.animate([{ scale: key === 'big' ? 1.7 : 1.35 }, { scale: 1 }], { duration: 320, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)' });
     };
     // Web Animations API: a full-stage colour wash that fades itself out.
     const flash = (color: string) => els.current.flash?.animate([{ background: color, opacity: 0.45 }, { background: color, opacity: 0 }], 350);
@@ -35,11 +41,12 @@ export function Stage({ n, camera, children }: { n: number; camera?: CameraProps
       Array.from({ length: 7 }, (_, k) => ({ transform: k === 6 ? 'none' : `translate(${(Math.random() - 0.5) * 24 * amount}px, ${(Math.random() - 0.5) * 24 * amount}px)` })), 260);
     return Object.assign(set, { flash, shake, p: (kind: 's' | 'h', p: number, text: string) => set(kind + p, text) });
   }, []);
+  const shell = useContext(Shell);
   const el = (key: string, className: string) => <div className={`hud ${className}`} ref={(e) => void (els.current[key] = e)} />;
   return (
-    <div className="stage" ref={(e) => void (els.current.stage = e)}>
+    <div className="stage" ref={(e) => void (els.current.stage = e)} onClick={shell.pause}>
       {/* Default camera: orthographic, 1 unit = 1/16 of the stage width on any display. */}
-      <Canvas orthographic={!camera} dpr={[1, 1.5]} gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+      <Canvas orthographic={!camera} frameloop={shell.paused ? 'never' : 'always'} dpr={[1, 1.5]} gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         camera={camera ?? { zoom: 1, position: [0, 0, 10], left: -W / 2, right: W / 2, top: H / 2, bottom: -H / 2 }}>
         <ambientLight intensity={1.2} />
         <directionalLight position={[3, 5, 8]} intensity={2} />
