@@ -2,7 +2,7 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { createRoot } from 'react-dom/client';
-import { perf, players, setPlayers, startPose, tuning } from './pose.ts';
+import { perf, players, predict, setPlayers, startPose, track, tuning } from './pose.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
@@ -54,7 +54,8 @@ const BITS = Array.from({ length: 14 }, (_, i) => vars({
 }));
 const Backdrop = ({ ingame }: { ingame: boolean }) => (
   <div className={ingame ? 'backdrop ingame' : 'backdrop'}>
-    {!ingame && <><div className="blob a" /><div className="blob b" /><div className="blob c" />{BITS.map((style, i) => <div key={i} className="bit" style={style} />)}</>}
+    <div className="blob a" /><div className="blob b" /><div className="blob c" />
+    {!ingame && BITS.map((style, i) => <div key={i} className="bit" style={style} />)}
   </div>
 );
 
@@ -112,7 +113,7 @@ function HandCursor() {
       const hand = hands[which], on = players[0].present && hand.seen;
       el.current!.style.display = on ? '' : 'none';
       if (!on) return void (x = NaN);
-      const tx = ((hand.x + 1) / 2) * innerWidth, ty = ((1 - hand.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 12);
+      const at = predict(hand), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
       y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
       el.current!.style.transform = `translate(${x}px, ${y}px)`;
@@ -140,7 +141,7 @@ function HandCursor() {
 function Fps() {
   const [, tick] = useState(0);
   useEffect(() => { const id = setInterval(() => tick((v) => v + 1), 1000); return () => clearInterval(id); }, []);
-  return <>tracker {perf.delegate} {perf.fps.toFixed(0)} fps</>;
+  return <>tracker {perf.delegate} · {perf.fps.toFixed(0)} fps · {track.lag.toFixed(0)} ms</>;
 }
 
 function App() {

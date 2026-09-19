@@ -21,7 +21,8 @@ body { background: var(--night); color: var(--ink); font: 500 1.4rem/1.4 Fredoka
 /* ---- Backdrop: your own mirror image, tinted, under drifting neon blobs and rising shapes ---- */
 video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.2; }
 .backdrop { position: fixed; inset: 0; pointer-events: none; overflow: hidden; background: linear-gradient(160deg, rgba(18, 10, 46, 0.9), rgba(45, 16, 84, 0.72) 55%, rgba(18, 10, 46, 0.92)); }
-.backdrop.ingame { background: rgba(10, 6, 28, 0.55); }
+.backdrop.ingame { background: linear-gradient(180deg, rgba(14, 8, 38, 0.82), rgba(38, 14, 74, 0.7)); }
+.backdrop.ingame .blob { opacity: 0.28; }
 .blob { position: absolute; width: 60vw; height: 60vw; border-radius: 50%; opacity: 0.5; animation: drift 22s ease-in-out infinite alternate; }
 .blob.a { left: -20vw; top: -30vw; background: radial-gradient(circle, rgba(255, 77, 141, 0.55), transparent 62%); }
 .blob.b { right: -25vw; top: -10vw; background: radial-gradient(circle, rgba(61, 225, 255, 0.45), transparent 62%); animation-duration: 28s; animation-delay: -8s; }
