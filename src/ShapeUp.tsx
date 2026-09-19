@@ -1,12 +1,13 @@
 // Shape Up — hole-in-the-wall. A pose grows toward you; match it with your whole body before it lands.
 // Poses use the full wingspan, so this one is solo or take-turns only (PLAN §3: "wide" footprint).
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
+import { hardness } from './meta.ts';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { players, poseMatch as match, sim } from './pose.ts';
-import { PLAYER_COLORS, Stage, blip, useRound, type GameProps, type Hud } from './stage.tsx';
+import { PLAYER_COLORS, Stage, music, sfx, useRound, type GameProps, type Hud } from './stage.tsx';
 
-const D = Math.PI / 180, PER_POSE = 5, SHOW = 1; // seconds per pose, of which the last one shows the verdict
+const D = Math.PI / 180, SHOW = 1; // seconds per pose, of which the last one shows the verdict
 const LEGS = [-95, -90, -85, -90];
 // Limb angles in degrees, screen space (0 = pointing right, 90 = up), in pose.ts LIMBS order:
 // screen-left upper arm, forearm, screen-right upper arm, forearm, then thigh, shin for each leg.
@@ -29,7 +30,7 @@ const POSES: number[][] = [
   [-100, -95, 80, 85, -95, -90, -40, -120], // right arm up, right knee up
 ].map((pose) => pose.map((deg) => deg * D));
 const STAND = [-100, -95, -80, -85, ...LEGS].map((deg) => deg * D);
-const ROUND = 8 * PER_POSE;
+const POSES_PER_ROUND = 8;
 
 // A stick figure built from the same 8 angles, so target and player are directly comparable on screen.
 const limbGeo = new THREE.BoxGeometry(1, 0.24, 0.1).translate(0.5, 0, 0); // pivots at its near end
@@ -58,10 +59,12 @@ function Figure({ limbs, material }: { limbs: React.RefObject<(THREE.Mesh | null
   );
 }
 
-function Scene({ onEnd, hud }: GameProps & { hud: Hud }) {
+function Scene({ stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const PER_POSE = Math.max(3, 5 / hardness(stage)); // less time to find the shape on higher stages
+  useLayoutEffect(() => { music.start('calm', undefined, 0.7); return () => music.stop(); }, []);
   const target = useRef<THREE.Group>(null), targetLimbs = useRef<(THREE.Mesh | null)[]>([]), myLimbs = useRef<(THREE.Mesh | null)[]>([]);
   const g = useRef({ order: [...POSES].sort(() => Math.random() - 0.5), score: 0, best: 0, judged: -1 }).current;
-  const tick = useRound(hud, ROUND, () => onEnd([g.score]));
+  const tick = useRound(hud, POSES_PER_ROUND * PER_POSE, () => { music.stop(); onEnd([g.score]); });
 
   useFrame((_, dt) => {
     const t = tick(dt);
@@ -86,7 +89,7 @@ function Scene({ onEnd, hud }: GameProps & { hud: Hud }) {
       g.judged = i;
       g.score += g.best;
       hud('h0', g.best >= 90 ? `Perfect! ${g.best}%` : `${g.best}%`);
-      blip(g.best >= 60 ? 660 : 140, 0.2);
+      sfx(g.best >= 90 ? 'powerUp' : g.best >= 60 ? 'confirmation' : 'error', { vol: 0.8 });
       if (g.best < 40) hud.flash('#ef4444');
       g.best = 0;
     }
