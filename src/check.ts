@@ -1,6 +1,6 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, handInZone, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
+import { assignSlots, handInZone, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
 
@@ -49,6 +49,12 @@ for (let k = 0; k < 120; k++) { out = still.next(0.5 + (k % 2 ? 0.02 : -0.02), 1
 assert.ok(spread < 0.02 / 3, `jitter only reduced to ${spread}`);
 for (let k = 0; k < 30; k++) out = fast.next(k / 10, 1 / 30); // 3 zone-units per second
 assert.ok(2.9 - out < 0.25, `lagging ${2.9 - out} behind a fast hand`);
+
+// Prediction: a hand moving right at 2 units/s, read 70ms ago, is drawn ahead of its reading — but never past maxLead.
+const moving = { x: 0, y: 0, vx: 2, vy: 0, seen: true, t: 1000 };
+assert.ok(Math.abs(predict(moving, 1070).x - 2 * (0.07 + tuning.lookahead)) < 1e-9);
+assert.ok(Math.abs(predict(moving, 9000).x - 2 * tuning.maxLead) < 1e-9);
+assert.equal(predict({ ...moving, vx: 0 }, 1070).x, 0); // a still hand is not moved
 
 // Streak: consecutive goal-days, still alive if today hasn't been played yet.
 const at = (daysAgo: number, points: number) =>

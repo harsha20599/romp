@@ -1,11 +1,11 @@
 // What every game shares: the 16:9 stage + HUD, the round clock, sound, and the players' hands.
 // R3F rules kept here: nothing per-frame goes through React state; HUD is DOM text written via refs.
-import { Suspense, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
+import { Suspense, createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Canvas, type CameraProps } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { PerformanceMonitor, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
-import { players } from './pose.ts';
+import { players, predict } from './pose.ts';
 import { blip, say, sfx } from './audio.ts';
 export { audio, blip, jingle, music, say, sfx } from './audio.ts';
 
@@ -42,16 +42,19 @@ export function Stage({ n, camera, children }: { n: number; camera?: CameraProps
     return Object.assign(set, { flash, shake, p: (kind: 's' | 'h', p: number, text: string) => set(kind + p, text) });
   }, []);
   const shell = useContext(Shell);
+  // Quality steps down by itself: if the frame rate sags, drop to 1x resolution and lose the bloom. Responsiveness beats gloss.
+  const [lean, setLean] = useState(false);
   const el = (key: string, className: string) => <div className={`hud ${className}`} ref={(e) => void (els.current[key] = e)} />;
   return (
     <div className="stage" ref={(e) => void (els.current.stage = e)} onClick={shell.pause}>
       {/* Default camera: orthographic, 1 unit = 1/16 of the stage width on any display. */}
-      <Canvas orthographic={!camera} frameloop={shell.paused ? 'never' : 'always'} dpr={[1, 1.5]} gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+      <Canvas orthographic={!camera} frameloop={shell.paused ? 'never' : 'always'} dpr={lean ? 1 : [1, 1.25]} gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         camera={camera ?? { zoom: 1, position: [0, 0, 10], left: -W / 2, right: W / 2, top: H / 2, bottom: -H / 2 }}>
+        <PerformanceMonitor onDecline={() => setLean(true)} />
         <ambientLight intensity={1.2} />
         <directionalLight position={[3, 5, 8]} intensity={2} />
         <Suspense fallback={null}>{children(hud)}</Suspense>
-        {effects.on && <EffectComposer multisampling={0}><Bloom intensity={0.7} luminanceThreshold={0.55} luminanceSmoothing={0.2} mipmapBlur /></EffectComposer>}
+        {effects.on && !lean && <EffectComposer multisampling={0}><Bloom intensity={0.7} luminanceThreshold={0.55} luminanceSmoothing={0.2} mipmapBlur /></EffectComposer>}
       </Canvas>
       {el('flash', 'flash')}{el('clock', 'clock')}{el('big', 'big')}
       {el('s0', n === 1 ? 'score solo' : 'score p1')}{el('h0', n === 1 ? 'hint solo' : 'hint p1')}
@@ -172,7 +175,8 @@ export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw:
       if (!s.on) return s;
       // The camera updates ~30x a second, the screen 60x: glide toward the latest reading so motion is continuous,
       // and take speed from the tracker (measured at camera rate) — never from per-frame screen deltas.
-      const tx = map.cx(s.p) + hand.x * map.hw, ty = (map.cy ?? 0) + hand.y * map.hh, k = was ? 1 - Math.exp(-dt * 30) : 1;
+      // …and the reading is already old when it arrives, so aim at where the hand is by now (pose.ts predict).
+      const at = predict(hand), tx = map.cx(s.p) + at.x * map.hw, ty = (map.cy ?? 0) + at.y * map.hh, k = was ? 1 - Math.exp(-dt * 45) : 1;
       s.px = was ? s.x : tx;
       s.py = was ? s.y : ty;
       s.x = s.px + (tx - s.px) * k;
