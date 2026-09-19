@@ -25,5 +25,6 @@ export function summary(sessions: Session[], who: string, now = Date.now()) {
   let streak = 0;
   for (; hit(d); d.setDate(d.getDate() - 1)) streak++;
 
-  return { today: byDay.get(day(now)) ?? 0, total: mine.reduce((a, s) => a + s.points, 0), streak, best };
+  const week = mine.reduce((sum, x) => sum + (now - x.t < 7 * 864e5 ? x.points : 0), 0); // rolling, not calendar
+  return { today: byDay.get(day(now)) ?? 0, week, total: mine.reduce((a, s) => a + s.points, 0), streak, best };
 }

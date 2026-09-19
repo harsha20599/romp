@@ -3,16 +3,28 @@ import { useEffect, useRef, useState, type FC } from 'react';
 import { createRoot } from 'react-dom/client';
 import { perf, players, setPlayers, startPose, tuning } from './pose.ts';
 import { DAY_GOAL, load, save, summary } from './stats.ts';
+import { audio, type GameProps } from './stage.tsx';
 import Slice from './Slice.tsx';
+import Dodge from './Dodge.tsx';
+import Jab from './Jab.tsx';
+import Beat from './Beat.tsx';
+import ShapeUp from './ShapeUp.tsx';
 
-type Game = { id: string; name: string; blurb: string; maxPlayers: 1 | 2; Play: FC<{ n: number; onEnd: (scores: number[]) => void }> };
-// The library. A new game = one component + one row here. maxPlayers 2 only for compact-footprint games (PLAN §3).
-const GAMES: Game[] = [{ id: 'slice', name: 'Slice', blurb: 'Cut the fruit, dodge the bombs. 60 seconds.', maxPlayers: 2, Play: Slice }];
+type Game = { id: string; name: string; blurb: string; maxPlayers: 1 | 2; Play: FC<GameProps> };
+// The library. A new game = one component + one row here. maxPlayers 2 only for compact-footprint games (PLAN §3);
+// a wide game is still playable by two through "Take turns".
+const GAMES: Game[] = [
+  { id: 'slice', name: 'Slice', blurb: 'Cut the fruit, dodge the bombs.', maxPlayers: 2, Play: Slice },
+  { id: 'dodge', name: 'Dodge', blurb: 'Jump, duck and lean past what is coming.', maxPlayers: 2, Play: Dodge },
+  { id: 'jab', name: 'Jab', blurb: 'Punch the pads, duck the bar.', maxPlayers: 2, Play: Jab },
+  { id: 'beat', name: 'Beat', blurb: 'Hit the moves in time with the drums.', maxPlayers: 2, Play: Beat },
+  { id: 'shapeup', name: 'Shape Up', blurb: 'Match the pose before it lands.', maxPlayers: 1, Play: ShapeUp },
+];
 
-type Screen =
-  | { at: 'start' | 'home' | 'stats' }
-  | { at: 'play'; game: Game }
-  | { at: 'results'; game: Game; scores: number[]; points: number[] };
+const MODES = { solo: 'Solo', together: 'Together', turns: 'Take turns' } as const;
+type Mode = keyof typeof MODES;
+type Run = { game: Game; turn: number; scores: number[]; points: number[] };
+type Screen = { at: 'start' | 'home' | 'stats' } | ({ at: 'play' | 'next' | 'results' } & Run);
 
 // The pointer is P1's higher visible hand; holding it over a button for DWELL ms clicks it.
 const DWELL = 1200;
@@ -57,7 +69,8 @@ function App() {
   const [error, setError] = useState('');
   const [db, setDb] = useState(load);
   const [who, setWho] = useState([0, 1]); // profile index per player slot
-  const [n, setN] = useState(1);
+  const [mode, setMode] = useState<Mode>('solo');
+  const n = mode === 'together' ? 2 : 1; // bodies tracked at once; "turns" is two people, one at a time
   const energy0 = useRef([0, 0]);
 
   const update = (next: typeof db) => { save(next); setDb(next); };
@@ -65,21 +78,25 @@ function App() {
     if (s.at === 'play') energy0.current = players.map((p) => p.energy);
     setScreen(s);
   };
-  const choosePlayers = (count: number) => { setN(count); setPlayers(count); };
+  const chooseMode = (m: Mode) => { setMode(m); setPlayers(m === 'together' ? 2 : 1); };
   const start = async () => {
     // Fullscreen first: it needs the tap's user-activation, which is gone once the camera prompt and model load finish.
     try { void document.documentElement.requestFullscreen().catch(() => {}); } catch { /* not supported — play windowed */ }
+    void audio().resume(); // same reason: games are later started by a hand-dwell, which is not a user gesture
     try { await startPose(video.current!); } catch (e) {
       return setError(`Camera or tracker failed: ${(e as Error).message}. Allow the camera — and if this is the http://192.168… address, add it under chrome://flags → “Insecure origins treated as secure” first.`);
     }
     go({ at: 'home' });
   };
-  const finish = (game: Game, scores: number[]) => {
-    const points = scores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
+  const finish = (run: Run, gameScores: number[]) => {
+    const earned = gameScores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
+    const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned];
+    if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points });
     const t = Date.now();
-    update({ ...db, sessions: [...db.sessions, ...scores.map((score, i) => ({ t, game: game.id, who: db.profiles[who[i]], score, points: points[i] }))] });
-    go({ at: 'results', game, scores, points });
+    update({ ...db, sessions: [...db.sessions, ...scores.map((score, i) => ({ t, game: run.game.id, who: db.profiles[who[i]], score, points: points[i] }))] });
+    go({ ...run, at: 'results', scores, points });
   };
+  const play = (game: Game) => go({ at: 'play', game, turn: 0, scores: [], points: [] });
   const cycle = (slot: number) => setWho((w) => w.map((v, i) => (i === slot ? (v + 1) % db.profiles.length : v)));
   const rename = (slot: number) => {
     const old = db.profiles[who[slot]], name = prompt('Name', old)?.trim();
@@ -87,7 +104,8 @@ function App() {
     update({ profiles: db.profiles.map((p) => (p === old ? name : p)), sessions: db.sessions.map((s) => (s.who === old ? { ...s, who: name } : s)) });
   };
 
-  const slots = Array.from({ length: n }, (_, i) => i);
+  const slots = mode === 'solo' ? [0] : [0, 1];
+  const clash = slots.length === 2 && who[0] === who[1];
   return (
     <>
       <video className="mirror" ref={video} muted playsInline />
@@ -104,20 +122,22 @@ function App() {
           <div className="row"><h1 className="grow">Romp</h1><button onClick={() => go({ at: 'stats' })}>Stats</button></div>
           <h2>Who is playing</h2>
           <div className="row">
-            {[1, 2].map((c) => <button key={c} aria-pressed={n === c} onClick={() => choosePlayers(c)}>{c === 1 ? 'Solo' : 'Together'}</button>)}
+            {(Object.keys(MODES) as Mode[]).map((m) => <button key={m} aria-pressed={mode === m} onClick={() => chooseMode(m)}>{MODES[m]}</button>)}
           </div>
-          {slots.map((i) => (
-            <div className="row" key={i}>
-              <span className="muted">{n === 2 ? (i ? 'Right' : 'Left') : 'Player'}</span>
-              <button onClick={() => cycle(i)}>{db.profiles[who[i]]}</button>
-              <button onClick={() => rename(i)}>Rename</button>
-            </div>
-          ))}
-          {n === 2 && who[0] === who[1] && <p className="error">Pick two different players.</p>}
-          <h2>Games</h2>
           <div className="row">
+            {slots.map((i) => (
+              <span className="row" key={i}>
+                <span className="muted">{mode === 'together' ? (i ? 'Right' : 'Left') : mode === 'turns' ? (i ? 'Second' : 'First') : 'Player'}</span>
+                <button onClick={() => cycle(i)}>{db.profiles[who[i]]}</button>
+                <button className="small" onClick={() => rename(i)}>Rename</button>
+              </span>
+            ))}
+          </div>
+          {clash && <p className="error">Pick two different players.</p>}
+          <h2>Games</h2>
+          <div className="cards">
             {GAMES.filter((g) => g.maxPlayers >= n).map((g) => (
-              <button className="card" key={g.id} disabled={n === 2 && who[0] === who[1]} onClick={() => go({ at: 'play', game: g })}>
+              <button className="card" key={g.id} disabled={clash} onClick={() => play(g)}>
                 {g.name}<small>{g.blurb}</small>
               </button>
             ))}
@@ -126,7 +146,14 @@ function App() {
           <p className="muted num">Hold a hand over a button to press it · <Fps /></p>
         </div>
       )}
-      {screen.at === 'play' && <screen.game.Play n={n} onEnd={(scores) => finish(screen.game, scores)} />}
+      {screen.at === 'play' && <screen.game.Play key={screen.turn} n={n} onEnd={(scores) => finish(screen, scores)} />}
+      {screen.at === 'next' && (
+        <div className="screen">
+          <h1>{db.profiles[who[0]]} scored {screen.scores[0]}</h1>
+          <p className="muted">{db.profiles[who[1]]}, step in. {db.profiles[who[0]]}, step out of view.</p>
+          <div className="row"><button className="primary" onClick={() => go({ ...screen, at: 'play' })}>Ready</button></div>
+        </div>
+      )}
       {screen.at === 'results' && (
         <div className="screen">
           <h1>{screen.game.name} — done</h1>
@@ -145,7 +172,7 @@ function App() {
             </tbody>
           </table>
           <div className="row">
-            <button className="primary" onClick={() => go({ at: 'play', game: screen.game })}>Play again</button>
+            <button className="primary" onClick={() => play(screen.game)}>Play again</button>
             <button onClick={() => go({ at: 'home' })}>Home</button>
           </div>
         </div>
@@ -154,11 +181,11 @@ function App() {
         <div className="screen">
           <div className="row"><h1 className="grow">Stats</h1><button onClick={() => go({ at: 'home' })}>Back</button></div>
           <table className="num">
-            <thead><tr><th>Player</th><th>Today</th><th>Streak</th><th>All-time points</th>{GAMES.map((g) => <th key={g.id}>Best {g.name}</th>)}</tr></thead>
+            <thead><tr><th>Player</th><th>Today</th><th>7 days</th><th>Streak</th><th>All time</th>{GAMES.map((g) => <th key={g.id}>Best {g.name}</th>)}</tr></thead>
             <tbody>
               {db.profiles.map((p) => {
                 const s = summary(db.sessions, p);
-                return <tr key={p}><td>{p}</td><td>{s.today} / {DAY_GOAL}</td><td>{s.streak}</td><td>{s.total}</td>{GAMES.map((g) => <td key={g.id}>{s.best[g.id] ?? '—'}</td>)}</tr>;
+                return <tr key={p}><td>{p}</td><td>{s.today} / {DAY_GOAL}</td><td>{s.week}</td><td>{s.streak}</td><td>{s.total}</td>{GAMES.map((g) => <td key={g.id}>{s.best[g.id] ?? '—'}</td>)}</tr>;
               })}
             </tbody>
           </table>
