@@ -16,6 +16,7 @@ h2 { font-size: 1.6rem; font-weight: 600; color: var(--ink-muted); }
 .row { display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; }
 .grow { flex: 1; }
 .muted { color: var(--ink-muted); }
+p.small { font-size: 1.1rem; padding-left: 1rem; }
 .num { font-variant-numeric: tabular-nums; }
 .error { color: #f87171; }
 
@@ -30,13 +31,16 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button[aria-pressed='true'] { border-color: var(--accent-ink); color: var(--accent-ink); }
 button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 button.small { min-width: 0; color: var(--ink-muted); }
-.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.2rem; }
-button.card { text-align: left; min-width: 0; min-height: 11rem; align-self: stretch; padding: 2rem; border-radius: 1rem; }
+.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
+button.card { text-align: left; min-width: 0; min-height: 8rem; padding: 1.2rem 1.6rem; align-self: stretch; padding: 2rem; border-radius: 1rem; }
 button.card { font-size: 1.8rem; font-weight: 600; }
 button.card small { font-size: 1.2rem; margin-top: 0.4rem; display: block; color: var(--ink-muted); font-weight: 400; }
 
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+table.tight th, table.tight td { padding: 0.35rem 1rem; }
+td.lead { color: var(--success); font-weight: 600; }
 th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
 
 /* Hand cursor: ring fills while dwelling on a button. */
@@ -51,6 +55,8 @@ th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
 /* Game stage: fixed 16:9, letterboxed on any display. */
 .stage { position: fixed; inset: 0; margin: auto; width: min(100vw, 100vh * 16 / 9); height: min(100vh, 100vw * 9 / 16); }
 .hud { position: absolute; top: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #000; }
+.hud.flash { inset: 0; top: 0; opacity: 0; pointer-events: none; }
+.hud.big { top: 38%; left: 50%; transform: translate(-50%, -50%); font-size: 12rem; line-height: 1; }
 .hud.clock { left: 50%; transform: translateX(-50%); font-size: 3.2rem; }
 .hud.score { font-size: 2.8rem; }
 .hud.hint { top: 6.2rem; font-size: 2rem; color: var(--ink); }
