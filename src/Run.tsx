@@ -118,12 +118,16 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
 
     for (let p = 0; p < n; p++) {
       const pl = players[p], R = runners[p], list = world.things[p];
-      const lane = pl.lean > tuning.leanOver ? 1 : pl.lean < -tuning.leanOver ? -1 : 0, air = pl.lift > tuning.jump, low = pl.lift < tuning.crouch;
-      R.x += (lane * LANE - R.x) * Math.min(1, dt * 12);
+      const air = pl.lift > tuning.jump, low = pl.lift < tuning.crouch;
+      // Analog steering: the runner is wherever your body puts it, continuously — with a gentle pull toward the
+      // nearest lane centre so you settle into lanes instead of hovering on the lines.
+      const free = pl.steer * LANE * 1.1, target = free + (Math.round(free / LANE) * LANE - free) * 0.35;
+      R.x += (Math.max(-LANE * 1.1, Math.min(LANE * 1.1, target)) - R.x) * Math.min(1, dt * 18);
       const inLane = Math.round(R.x / LANE);
       R.holder.visible = pl.present;
       R.holder.position.set(trackX(p) + R.x, Math.max(0, pl.lift) * 2.4, 0);
-      R.holder.rotation.z = (lane * LANE - R.x) * -0.18 + (g.hurt[p] > 0 ? Math.sin(t * 40) * 0.15 : 0);
+      R.holder.rotation.z = -pl.steer * 0.3 + (g.hurt[p] > 0 ? Math.sin(t * 40) * 0.15 : 0); // the robot leans as you lean
+      R.holder.rotation.y = (target - R.x) * -0.25;
       R.bubble.visible = g.shield[p];
       const want = air ? 'Jump' : low ? 'Sitting' : 'Running';
       if (want !== R.now) { R.act[R.now].fadeOut(0.12); R.act[want].reset().fadeIn(0.12).play(); R.now = want; }

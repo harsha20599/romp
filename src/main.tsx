@@ -2,7 +2,7 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { createRoot } from 'react-dom/client';
-import { perf, players, setPlayers, startPose, tuning } from './pose.ts';
+import { grip, perf, players, predict, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
@@ -40,7 +40,7 @@ const MODES = { solo: 'Solo', together: 'Together', turns: 'Take turns' } as con
 type Mode = keyof typeof MODES;
 type Reward = { stars: number; xp: number; newBest: boolean; levelUp: number; badges: string[]; challenges: string[] };
 type Round = { game: Game; stage: number; turn: number; scores: number[]; points: number[]; rewards: Reward[] };
-type Screen = { at: 'start' | 'home' | 'stats' | 'badges' } | { at: 'brief'; game: Game; stage: number } | ({ at: 'play' | 'next' | 'results' } & Round);
+type Screen = { at: 'start' | 'home' | 'stats' | 'badges' | 'tracking' } | { at: 'brief'; game: Game; stage: number } | ({ at: 'play' | 'next' | 'results' } & Round);
 
 const vars = (v: Record<string, string | number>) => v as CSSProperties; // CSS custom properties for inline style
 const toneOf = (g: Game) => vars({ '--a': g.tone[0], '--b': g.tone[1] });
@@ -54,7 +54,8 @@ const BITS = Array.from({ length: 14 }, (_, i) => vars({
 }));
 const Backdrop = ({ ingame }: { ingame: boolean }) => (
   <div className={ingame ? 'backdrop ingame' : 'backdrop'}>
-    {!ingame && <><div className="blob a" /><div className="blob b" /><div className="blob c" />{BITS.map((style, i) => <div key={i} className="bit" style={style} />)}</>}
+    <div className="blob a" /><div className="blob b" /><div className="blob c" />
+    {!ingame && BITS.map((style, i) => <div key={i} className="bit" style={style} />)}
   </div>
 );
 
@@ -71,6 +72,38 @@ function Player({ sessions, who, tone }: { sessions: Session[]; who: string; ton
       </span>
     </span>
   );
+}
+
+// What the tracker actually sees: shoulders, hips and both palms drawn over the live picture, each palm with a
+// short trail — hold a hand still and the size of the scribble IS the tracking noise.
+function TrackingView() {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const trails: number[][][] = [[], [], [], []];
+    let raf = requestAnimationFrame(function draw() {
+      raf = requestAnimationFrame(draw);
+      const c = canvas.current!, video = document.querySelector('video')!, g = c.getContext('2d')!;
+      c.width = innerWidth; c.height = innerHeight;
+      // The picture is shown with object-fit: cover, so frame coordinates map through the same crop.
+      const k = Math.max(c.width / (video.videoWidth || 1), c.height / (video.videoHeight || 1));
+      const at = ([x, y]: number[]) => [(x - 0.5) * video.videoWidth * k + c.width / 2, (y - 0.5) * video.videoHeight * k + c.height / 2];
+      players.forEach((pl, i) => {
+        if (!pl.present || !pl.body.length) return void (trails[i * 2].length = trails[i * 2 + 1].length = 0);
+        const [ls, rs, lh, rh, lp, rp] = [pl.body[11], pl.body[12], pl.body[23], pl.body[24], ...pl.palms].map(at);
+        g.strokeStyle = g.fillStyle = PLAYER_COLORS[i]; g.lineWidth = 5; g.lineJoin = 'round';
+        g.beginPath(); g.moveTo(ls[0], ls[1]); g.lineTo(rs[0], rs[1]); g.lineTo(rh[0], rh[1]); g.lineTo(lh[0], lh[1]); g.closePath(); g.stroke();
+        [lp, rp].forEach((palm, h) => {
+          const trail = trails[i * 2 + h];
+          if (!pl.hands[h].seen) return void (trail.length = 0);
+          trail.push(palm); if (trail.length > 45) trail.shift();
+          g.lineWidth = 3; g.strokeStyle = '#ffe14d'; g.beginPath(); trail.forEach(([x, y], n) => (n ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+          g.fillStyle = '#ffe14d'; g.beginPath(); g.arc(palm[0], palm[1], 14, 0, 7); g.fill();
+        });
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return <canvas ref={canvas} style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }} />;
 }
 
 function CountUp({ to }: { to: number }) {
@@ -95,24 +128,31 @@ function Confetti() {
   return <div className="confetti">{bits.map((style, i) => <i key={i} style={style} />)}</div>;
 }
 
-// The pointer is P1's higher hand; holding it over a button for DWELL ms clicks it. Three things keep it calm:
-// it glides instead of jumping, it only switches hands when the other is clearly higher, and once it is
-// dwelling on a button it stays "on" it until it leaves by a margin — so a wobble never resets the ring.
-const DWELL = 1200, STICKY = 40;
+// The pointer is P1's higher hand. You press by CLOSING YOUR FIST over a button (pose.ts `grip`: a hand model looks at
+// the palm, in menus only). If the hand model cannot see a hand — too far, too dark — for a few seconds, holding still
+// over a button presses it instead, so nobody is ever stuck. It stays calm three ways: it glides, it only switches
+// hands when the other is clearly higher, and once on a button it sticks until it leaves by a margin — closing a fist
+// shifts the palm a little, and that must not slide you off the button you were aiming at.
+const DWELL = 1500, STICKY = 40, BLIND_AFTER = 4000;
+const pressMode = () => { try { return localStorage.getItem('romp.press') === 'hold' ? 'hold' : 'fist'; } catch { return 'fist'; } };
 function HandCursor() {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    let raf = 0, target: HTMLButtonElement | null = null, since = 0, last = 0, which = 1, x = NaN, y = NaN;
+    const fistMode = pressMode() === 'fist';
+    let raf = 0, target: HTMLButtonElement | null = null, since = 0, last = 0, which = 1, x = NaN, y = NaN, wasClosed = false, shownAt = 0;
+    grip.want = fistMode;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       const dt = Math.min(0.05, (now - last) / 1000), hands = players[0].hands;
       last = now;
       const other = 1 - which;
       if (hands[other].seen && (!hands[which].seen || hands[other].y > hands[which].y + 0.3)) which = other;
+      grip.hand = which;
       const hand = hands[which], on = players[0].present && hand.seen;
       el.current!.style.display = on ? '' : 'none';
-      if (!on) return void (x = NaN);
-      const tx = ((hand.x + 1) / 2) * innerWidth, ty = ((1 - hand.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 12);
+      if (!on) return void ((x = NaN), (shownAt = 0));
+      shownAt ||= now;
+      const at = predict(hand), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
       y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
       el.current!.style.transform = `translate(${x}px, ${y}px)`;
@@ -127,20 +167,62 @@ function HandCursor() {
         target = over;
         since = now;
       }
-      const p = target ? Math.min(1, Math.max(0, (now - since) / DWELL)) : 0;
+      // Fist: press on the moment the hand closes. A fist that was already closed when it arrived does not count.
+      const sees = fistMode && performance.now() - grip.seenAt < BLIND_AFTER, closed = sees && grip.closed;
+      el.current!.classList.toggle('closed', closed);
+      el.current!.classList.toggle('fist', sees);
+      if (closed && !wasClosed && target) target.click();
+      wasClosed = closed;
+      // Dwell: only in "hold" mode, or while the hand model is blind (and then only after giving it time to find the hand).
+      const dwell = !fistMode || (!sees && now - shownAt > BLIND_AFTER);
+      const p = dwell && target ? Math.min(1, Math.max(0, (now - since) / DWELL)) : 0;
       el.current!.style.setProperty('--p', String(p));
       if (p === 1) { target!.click(); since = now + DWELL; } // pause before it can re-fire
     };
     raf = requestAnimationFrame(loop);
-    return () => { cancelAnimationFrame(raf); target?.classList.remove('hot'); };
+    return () => { cancelAnimationFrame(raf); target?.classList.remove('hot'); grip.want = false; };
   }, []);
   return <div className="cursor" ref={el} />;
+}
+
+// Where the camera sees you, without showing the camera: a little frame with a stick figure per player, drawn from
+// the tracked joints, plus a word of guidance when the framing is off. Big in the menus, tiny in a corner in play.
+const BONES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]];
+function Presence({ small }: { small: boolean }) {
+  const canvas = useRef<HTMLCanvasElement>(null), note = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = requestAnimationFrame(function draw() {
+      raf = requestAnimationFrame(draw);
+      const c = canvas.current!, g = c.getContext('2d')!, W = (c.width = c.clientWidth * 2), H = (c.height = c.clientHeight * 2);
+      let say = sim ? '' : 'Step into view';
+      players.forEach((pl, i) => {
+        if (!pl.present || !pl.body.length) return;
+        const b = pl.body, seen = (k: number) => b[k][2] > 0.5;
+        g.strokeStyle = g.fillStyle = PLAYER_COLORS[i]; g.lineWidth = H * 0.035; g.lineCap = 'round';
+        for (const [a, z] of BONES) if (seen(a) && seen(z)) { g.beginPath(); g.moveTo(b[a][0] * W, b[a][1] * H); g.lineTo(b[z][0] * W, b[z][1] * H); g.stroke(); }
+        g.beginPath(); g.arc(b[0][0] * W, b[0][1] * H, H * 0.06, 0, 7); g.fill();
+        if (i) return;
+        const width = Math.hypot(b[11][0] - b[12][0], b[11][1] - b[12][1]), mid = (b[11][0] + b[12][0]) / 2;
+        say = !seen(27) && !seen(28) ? 'Step back — I cannot see your feet' : b[0][1] < 0.04 ? 'Step back — your head is cut off' : width < 0.05 ? 'Come a little closer'
+          : mid < 0.2 ? 'Move right' : mid > 0.8 ? 'Move left' : '';
+      });
+      if (note.current && note.current.textContent !== say) note.current.textContent = say;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return <div className={small ? 'presence small' : 'presence'}><canvas ref={canvas} /><span ref={note} /></div>;
 }
 
 function Fps() {
   const [, tick] = useState(0);
   useEffect(() => { const id = setInterval(() => tick((v) => v + 1), 1000); return () => clearInterval(id); }, []);
-  return <>tracker {perf.delegate} {perf.fps.toFixed(0)} fps</>;
+  return <>tracker {perf.delegate} · {perf.fps.toFixed(0)} fps · {track.lag.toFixed(0)} ms</>;
+}
+function TrackerDetail() {
+  const [, tick] = useState(0);
+  useEffect(() => { const id = setInterval(() => tick((v) => v + 1), 500); return () => clearInterval(id); }, []);
+  const blind = performance.now() - grip.seenAt > 1500;
+  return <>camera {track.camFps.toFixed(0)} fps · frame copy {track.grabMs.toFixed(0)} ms · model {track.modelMs.toFixed(0)} ms · hand: {blind ? 'not found' : `${grip.closed ? 'FIST' : 'open'} (curl ${grip.curl.toFixed(2)})`}</>;
 }
 
 function App() {
@@ -177,6 +259,8 @@ function App() {
     setScreen(s);
   };
   const chooseMode = (m: Mode) => { setMode(m); setPlayers(m === 'together' ? 2 : 1); };
+  // Tracker settings live in localStorage and are read when the tracker starts, so changing one restarts the app.
+  const setTracker = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } location.reload(); };
   const toggleFx = () => { effects.on = !fx; setFx(!fx); try { localStorage.setItem('romp.fx', fx ? 'off' : 'on'); } catch { /* private mode */ } };
   const start = async () => {
     // Fullscreen first: it needs the tap's user-activation, which is gone once the camera prompt and model load finish.
@@ -234,14 +318,14 @@ function App() {
   const party = screen.at === 'results' && screen.rewards.some((r) => r.stars === 3 || r.levelUp || r.newBest);
   return (
     <Shell.Provider value={shell}>
-      <video className="mirror" ref={video} muted playsInline />
-      <Backdrop ingame={screen.at === 'play'} />
+      <video className={screen.at === 'tracking' ? 'mirror bright' : 'mirror'} ref={video} muted playsInline />
+      {screen.at !== 'tracking' && <Backdrop ingame={screen.at === 'play'} />}
       {screen.at === 'start' && (
         <div className="screen" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '2rem' }}>
           <Logo huge />
           <h2>Your body is the controller. Move to play.</h2>
           <div className="row" style={{ justifyContent: 'center' }}>
-            {['📺 Stand the tablet under the TV', '🚶 Step back till your whole body shows', '🖐️ Hold a hand over a button to press it'].map((t) => <span className="goal" key={t}>{t}</span>)}
+            {['📺 Stand the tablet under the TV', '🚶 Step back till your whole body shows', '✊ Point at a button, close your fist to press'].map((t) => <span className="goal" key={t}>{t}</span>)}
           </div>
           <button className="primary giant" onClick={start}>Start</button>
           {error && <p className="error">{error}</p>}
@@ -253,6 +337,7 @@ function App() {
             <Logo />
             <p className="dim num grow" style={{ paddingLeft: '1rem' }}><Fps /></p>
             <button className="ghost" onClick={toggleFx}>✨ Glow {fx ? 'on' : 'off'}</button>
+            <button className="ghost" onClick={() => go({ at: 'tracking' })}>🎯 Tracking</button>
             <button className="ghost" onClick={() => go({ at: 'badges' })}>🏅 Badges</button>
             <button className="ghost" onClick={() => go({ at: 'stats' })}>📊 Stats</button>
           </div>
@@ -373,6 +458,41 @@ function App() {
           </div>
         </div>
       )}
+      {screen.at === 'tracking' && (
+        <div className="screen">
+          <TrackingView />
+          <div className="row"><h1 className="grow">🎯 Tracking</h1><button className="ghost" onClick={() => go({ at: 'home' })}>← Back</button></div>
+          <div className="panel" style={{ maxWidth: '46rem' }}>
+            <p className="num"><Fps /></p>
+            <p className="dim num">Camera {track.camera || '—'}</p>
+            <p className="dim num"><TrackerDetail /></p>
+            <p className="dim">Hold a hand still: the yellow scribble behind the dot is the tracking noise. Wave fast: a smeared, lagging trail means motion blur — add light, or try Sharp motion.</p>
+            <div className="row">
+              <span className="label">Model</span>
+              <div className="seg">
+                <button aria-pressed={tuning.model === 'full'} onClick={() => setTracker('romp.model', 'full')}>Precise</button>
+                <button aria-pressed={tuning.model === 'lite'} onClick={() => setTracker('romp.model', 'lite')}>Fast</button>
+              </div>
+            </div>
+            <div className="row">
+              <span className="label">Press with</span>
+              <div className="seg">
+                <button aria-pressed={pressMode() === 'fist'} onClick={() => setTracker('romp.press', 'fist')}>Fist</button>
+                <button aria-pressed={pressMode() === 'hold'} onClick={() => setTracker('romp.press', 'hold')}>Hold still</button>
+              </div>
+              <span className="dim">Close your fist over a button.</span>
+            </div>
+            <div className="row">
+              <span className="label">Sharp motion</span>
+              <div className="seg">
+                <button aria-pressed={!tuning.sharp} onClick={() => setTracker('romp.sharp', 'off')}>Off</button>
+                <button aria-pressed={tuning.sharp} onClick={() => setTracker('romp.sharp', 'on')}>On</button>
+              </div>
+              <span className="dim">Short exposure. Needs a bright room.</span>
+            </div>
+          </div>
+        </div>
+      )}
       {screen.at === 'badges' && (
         <div className="screen">
           <div className="row"><h1 className="grow">🏅 Badges · {name(0)} <span className="dim num">{badgesOf(db.sessions, name(0)).length} / {BADGES.length}</span></h1><button className="ghost" onClick={() => go({ at: 'home' })}>← Back</button></div>
@@ -413,6 +533,7 @@ function App() {
           </div>
         </div>
       )}
+      {screen.at !== 'start' && screen.at !== 'tracking' && <Presence small={screen.at === 'play'} />}
       {((screen.at !== 'play' && screen.at !== 'start') || paused) && <HandCursor />}
     </Shell.Provider>
   );

@@ -12,6 +12,8 @@ Everything under `public/assets/` is **CC0 (public domain)** — no attribution 
 | `jingles/` | [Kenney — Music Jingles](https://kenney.nl/assets/music-jingles) | CC0 |
 | `robot.glb` (RobotExpressive) | Tomás Laulhé, modified by Don McCurdy — via the three.js examples | CC0 |
 
+| `public/fonts/fredoka.woff2` | [Fredoka](https://fonts.google.com/specimen/Fredoka) — Milena Brandão, Hafontia | SIL Open Font Licence 1.1 |
+
 The music is not a recording: it is generated live by `src/audio.ts`.
 
 Libraries: three.js, React Three Fiber, drei, @react-three/rapier (Rapier physics), @react-three/postprocessing, MediaPipe Tasks Vision.
