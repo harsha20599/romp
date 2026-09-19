@@ -8,9 +8,13 @@ npm run dev      # http://localhost:5180 — add ?sim to play with the mouse, no
 npm run check    # input-maths + streak asserts, then tsc
 ```
 
-Served to the LAN by `systemctl --user status romp` → **http://192.168.0.100:5180** (static `dist/`;
-run `npm run build` to publish a change — no restart needed). The tablet is only a browser.
+Two ways in, both serving the same `dist/` — run `npm run build` to publish a change, nothing restarts:
 
-Chrome blocks the camera on plain-http LAN addresses, so once, on the tablet: open
-`chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add `http://192.168.0.100:5180`,
-set it to Enabled, relaunch. Tuning knobs: `tuning` in `src/pose.ts`.
+- **Tailscale (preferred): https://mayjuneserver.taild23e3.ts.net:8445** — `tailscale serve` hands out the folder over real HTTPS,
+  tailnet-only. The camera just works. The tablet needs the Tailscale app, signed in.
+  Off switch: `tailscale serve --https=8445 off`.
+- **LAN: http://192.168.0.100:5180** — `systemctl --user status romp`. Plain http, so Chrome blocks the
+  camera until, once on the tablet, `chrome://flags/#unsafely-treat-insecure-origin-as-secure` lists
+  that address and is Enabled.
+
+Tuning knobs: `tuning` in `src/pose.ts`.
