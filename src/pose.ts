@@ -12,8 +12,11 @@ export type Player = {
   lift: number; // shoulder-widths above the player's own standing height: >0 jumping, <0 crouching
   steer: number; // -1..1 analog left/right: leaning and side-stepping both count, whichever the player does
   lean: number; // shoulders' sideways offset from the hips, in shoulder-widths; >0 = toward screen-right
+  debug: number[][]; // mirrored frame positions of shoulders, hips and both palms — drawn on the Tracking screen
   angles: number[] | null; // 8 limb angles (radians, screen space) — see LIMBS
 };
+
+const stored = (key: string) => { try { return globalThis.localStorage?.getItem(key) ?? null; } catch { return null; } };
 
 // Calibration knobs. Guesses until tuned on the real tablet at real distance (PLAN P4).
 export const tuning = {
@@ -27,6 +30,8 @@ export const tuning = {
   bodyCalm: 1.2, bodyQuick: 3, // shoulder frame (position + width) the hands are measured against
   liftCalm: 3.5, liftQuick: 6, // jump / crouch / lean signals
   speedCut: 2.5, // cutoff (Hz) on the speed estimate itself: higher = the filter notices the start of a move sooner
+  predictFrom: 0.6, predictFull: 2.5, // hand speed (zone-units/s) where prediction starts, and where it is fully on.
+  // Below predictFrom a hand is "still": extrapolating a still hand only amplifies noise into wobble.
   lookahead: 0.03, // seconds predicted ahead on top of measured camera-to-screen age — hides tracking latency
   maxLead: 0.14, // never predict further than this, however stale the reading
   leanFull: 0.45, // lean (shoulder-widths) that steers fully to one side
@@ -40,13 +45,15 @@ export const tuning = {
   standBand: 0.25, // |lift| inside this counts as "standing"; the baseline follows it slowly
   energyDeadband: 0.05, // per-landmark travel (shoulder-widths/frame) ignored as jitter
   energyPerPoint: 12, // shoulder-widths of summed limb travel per activity point
-  model: 'lite' as 'lite' | 'full', // 'full' if lite loses people at 3m
+  model: (stored('romp.model') === 'lite' ? 'lite' : 'full') as 'lite' | 'full', // full: steadier wrists, a few ms slower. Switchable on the Tracking screen.
+  sharp: stored('romp.sharp') === 'on', // short camera exposure: sharper fast hands, darker picture. Needs a well-lit room.
 };
 
 const mkPlayer = (): Player => ({
   present: false,
   hands: [{ x: 0, y: 0, vx: 0, vy: 0, seen: false, t: 0 }, { x: 0, y: 0, vx: 0, vy: 0, seen: false, t: 0 }],
   energy: 0,
+  debug: [],
   lift: 0,
   steer: 0,
   lean: 0,
@@ -85,8 +92,17 @@ export function bodyFrame(lm: NormalizedLandmark[], aspect: number) {
 
 // The narrow-room rule: a hand is read relative to its owner's shoulders, in shoulder-widths,
 // with gain — never as a position in the camera frame.
+// The pose model reports the wrist and two knuckles (pinky, index) for each hand. One point is noisy; the
+// visibility-weighted blend of three is steadier, and it sits on the palm — the part you actually swing at fruit.
+const HAND_POINTS: Record<number, [number, number][]> = { 15: [[15, 0.4], [17, 0.3], [19, 0.3]], 16: [[16, 0.4], [18, 0.3], [20, 0.3]] };
+export function palm(lm: NormalizedLandmark[], wrist: number): NormalizedLandmark {
+  let x = 0, y = 0, total = 0;
+  for (const [k, weight] of HAND_POINTS[wrist]) { const w = weight * (lm[k].visibility ?? 1); x += lm[k].x * w; y += lm[k].y * w; total += w; }
+  return total > 0.05 ? { x: x / total, y: y / total, z: 0, visibility: lm[wrist].visibility ?? 1 } : lm[wrist];
+}
+
 export function handInZone(lm: NormalizedLandmark[], wrist: number, aspect: number, n: number, f = bodyFrame(lm, aspect)) {
-  const w = lm[wrist];
+  const w = palm(lm, wrist);
   const clamp = (v: number) => Math.max(-1, Math.min(1, v));
   return {
     x: clamp((mx(w, aspect) - f.x) / f.sw / tuning.reachX[n - 1]),
@@ -143,7 +159,7 @@ const resetFilters = (F: ReturnType<typeof mkFilters>) =>
 const prev: (NormalizedLandmark[] | null)[] = [null, null];
 let lastApply = 0;
 // Each player's own standing shoulder height: learned while they stand, re-learned if they walk to a new spot.
-const stand = [{ y: NaN, x: NaN, since: 0 }, { y: NaN, x: NaN, since: 0 }];
+const stand = [{ y: NaN, x: NaN, since: 0, ratio: 0 }, { y: NaN, x: NaN, since: 0, ratio: 0 }];
 // `now` is when the frame was captured, so every reading carries its true age and speeds use true frame spacing.
 function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.now()) {
   const slots = assignSlots(poses, aspect, nPlayers);
@@ -152,10 +168,21 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
   players.forEach((pl, i) => {
     const lm = slots[i], F = filters[i], st = stand[i];
     pl.present = !!lm;
-    if (!lm) return void ((prev[i] = null), (st.y = st.x = NaN), resetFilters(F));
+    if (!lm) return void ((prev[i] = null), (st.y = st.x = NaN), (st.ratio = 0), resetFilters(F));
 
     // The shoulder frame is smoothed harder than the hands: its noise is multiplied into every hand reading.
     const raw = bodyFrame(lm, aspect);
+    // Shoulder width is the unit every hand reading is measured in — but on camera it shrinks whenever you twist,
+    // and slicing IS twisting, so the hand dot used to swing with your torso. Torso length does not change with a
+    // twist. So: learn this player's shoulder-to-torso ratio while they face the camera (a slowly decaying maximum),
+    // and take the unit as the larger of the measured shoulders and torso × ratio. Twist → torso holds it up.
+    // Bend forward → the torso shortens instead, and the shoulders hold it up.
+    if (seen(lm[23]) && seen(lm[24])) {
+      const torso = Math.hypot(raw.x - (mx(lm[23], aspect) + mx(lm[24], aspect)) / 2, raw.y - (lm[23].y + lm[24].y) / 2);
+      st.ratio = Math.max(st.ratio * 0.9995, Math.min(1.3, raw.sw / (torso || 1e-6)));
+      raw.sw = Math.max(raw.sw, torso * st.ratio);
+    }
+    pl.debug = [lm[11], lm[12], lm[23], lm[24], palm(lm, 15), palm(lm, 16)].map((q) => [1 - q.x, q.y]);
     const f = { x: F.fx.next(raw.x, dt), y: F.fy.next(raw.y, dt), sw: F.sw.next(raw.sw, dt) };
     WRISTS.forEach((w, h) => {
       const hf = F.hands[h], r = handInZone(lm, w, aspect, nPlayers, f);
@@ -191,16 +218,37 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
   });
 }
 
-export const track = { lag: 0 }; // ms from camera frame to usable pose — shown next to the fps on the home screen
+export const track = { lag: 0, camera: '' }; // ms from camera frame to usable pose — shown next to the fps on the home screen
 
 export async function startPose(video: HTMLVideoElement) {
   if (landmarker || worker || sim) return sim ? startSim() : undefined;
-  // 640×480 on purpose: the model works at 256px anyway, so a bigger frame only costs upload time — i.e. latency.
-  // 4:3 also sees more height, which is what jumps and raised hands need.
-  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480, frameRate: 30 } });
+  // 1280×720: the tracker crops each person out of the frame and scales the crop to 256px. At three metres a
+  // player is ~430px tall at 720p but only ~290px at 480p — the bigger frame gives the crop real detail to shrink
+  // from (less sensor noise in, steadier landmarks out). 60fps is asked for, not required: if the camera can, each
+  // frame's exposure is shorter, which is what keeps a fast hand from smearing.
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720, frameRate: { ideal: 60 } } });
+  video.srcObject = stream;
+  track.camera = await tuneCamera(stream.getVideoTracks()[0]);
   await video.play();
   const model = `/models/pose_landmarker_${tuning.model}.task`;
   if (!(await startWorker(video, model).catch(() => false))) await startInline(video, model);
+}
+
+// A smeared hand cannot be tracked accurately by any model, so where the camera allows it we take control of the
+// exposure: short shutter (sharp motion), gain pushed up to compensate. Opt-in ("Sharp motion"), because in a dim
+// room the darker, noisier picture costs more accuracy than the blur did. Every step is best-effort.
+async function tuneCamera(cam: MediaStreamTrack) {
+  const caps = (cam.getCapabilities?.() ?? {}) as Record<string, { min: number; max: number } & string[]>, set = cam.getSettings();
+  const note = [`${set.width}×${set.height} @${Math.round(set.frameRate ?? 0)}`];
+  const tryApply = (advanced: Record<string, unknown>) => cam.applyConstraints({ advanced: [advanced] } as MediaTrackConstraints).then(() => true, () => false);
+  if (caps.focusMode?.includes('continuous')) await tryApply({ focusMode: 'continuous' });
+  if (!tuning.sharp) return note.join(' · ');
+  if (caps.exposureMode?.includes('manual') && caps.exposureTime) {
+    const shutter = Math.max(caps.exposureTime.min, Math.min(caps.exposureTime.max, 80)); // units of 100µs → 8ms, about 1/125s
+    const ok = await tryApply({ exposureMode: 'manual', exposureTime: shutter, ...(caps.iso ? { iso: caps.iso.max } : {}) });
+    note.push(ok ? `shutter ${(shutter / 10).toFixed(0)}ms` : 'shutter refused');
+  } else note.push('camera has no manual exposure');
+  return note.join(' · ');
 }
 
 // Preferred: inference in a worker. Frames are handed over as ImageBitmaps, one in flight at a time, so the
@@ -218,7 +266,7 @@ async function startWorker(video: HTMLVideoElement, model: string) {
   if (!ready) return w.terminate(), false;
   worker = w;
   perf.delegate = `${ready} worker`;
-  let busy = false, last = performance.now();
+  let busy = false, last = performance.now(), sent = 0;
   w.onmessage = (e) => {
     if (e.data.type !== 'pose') return;
     busy = false;
@@ -228,11 +276,14 @@ async function startWorker(video: HTMLVideoElement, model: string) {
     track.lag += (now - e.data.t - track.lag) * 0.1;
     last = now;
   };
-  const tick = async () => {
+  // `captureTime` is when the sensor took the frame (same clock as performance.now): true frame spacing for the
+  // speed estimate, and the true age of every reading for prediction — not the jittery moment the callback ran.
+  const tick = async (now: number, meta?: VideoFrameCallbackMetadata) => {
     video.requestVideoFrameCallback(tick);
     if (busy) return;
     busy = true;
-    const t = performance.now(), bitmap = await createImageBitmap(video).catch(() => null);
+    const t = Math.max(sent + 1, meta?.captureTime ?? now), bitmap = await createImageBitmap(video).catch(() => null);
+    sent = t; // the model wants strictly increasing timestamps
     if (bitmap) w.postMessage({ type: 'frame', bitmap, t }, [bitmap]); else busy = false;
   };
   video.requestVideoFrameCallback(tick);
@@ -261,7 +312,8 @@ async function startInline(video: HTMLVideoElement, model: string) {
 
 // Where a hand is *now*: its last reading pushed forward along its own velocity by the reading's age.
 export function predict(hand: Hand, now = performance.now()) {
-  const lead = Math.min(tuning.maxLead, Math.max(0, (now - hand.t) / 1000) + tuning.lookahead);
+  const speed = Math.hypot(hand.vx, hand.vy), k = Math.max(0, Math.min(1, (speed - tuning.predictFrom) / (tuning.predictFull - tuning.predictFrom)));
+  const lead = Math.min(tuning.maxLead, Math.max(0, (now - hand.t) / 1000) + tuning.lookahead) * k * k * (3 - 2 * k);
   return { x: Math.max(-1, Math.min(1, hand.x + hand.vx * lead)), y: Math.max(-1, Math.min(1, hand.y + hand.vy * lead)) };
 }
 
