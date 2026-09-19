@@ -1,15 +1,18 @@
 // Wipe — the screen is filthy; scrub it clean with both hands. Grime creeps back, faster every layer.
 // Clear your whole side for a bonus and a fresh, tougher layer. Reach is body-relative, so it is compact.
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
+import { hardness } from './meta.ts';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { H, Stage, blip, scoreHud, useBursts, useHands, useRound, type GameProps, type Hud } from './stage.tsx';
+import { H, Stage, music, sfx, scoreHud, useBursts, useHands, useRound, type GameProps, type Hud } from './stage.tsx';
 
 const ROUND = 60, COLS = 16, ROWS = 8, SCRUB = 1.15; // SCRUB = radius a hand cleans, in tiles
 const LAYERS = ['#78716c', '#57534e', '#7c2d12', '#365314', '#1e3a8a'];
 const tileGeo = new THREE.PlaneGeometry(0.96, 0.96), tmp = new THREE.Object3D(), tint = new THREE.Color();
 
-function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
+function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const hard = hardness(stage); // grime comes back sooner on higher stages
+  useLayoutEffect(() => { music.start('calm', undefined, 0.6); return () => music.stop(); }, []);
   const tiles = useMemo(() => Array.from({ length: COLS * ROWS }, (_, i) => {
     const x = (i % COLS) - COLS / 2 + 0.5, y = Math.floor(i / COLS) - ROWS / 2 + 0.5 - 0.4;
     return { x, y, zone: n === 2 && x > 0 ? 1 : 0, dirt: 1, cleanFor: 0 };
@@ -33,8 +36,8 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
       if (t >= 0 && tile.dirt > 0.5 && at.some((h) => h.on && h.p === z && Math.hypot(h.x - tile.x, h.y - tile.y) < SCRUB)) {
         tile.dirt = 0; tile.cleanFor = 0; g.scores[z]++;
         if (Math.random() < 0.3) bursts.burst(tile.x, tile.y, 0.5, '#e0f2fe', 4, 3);
-        if (Math.random() < 0.2) blip(1200 + Math.random() * 600, 0.03, 'sine', undefined, 0.05);
-      } else if (tile.dirt < 1 && (tile.cleanFor += dt) > 4 - Math.min(3, g.layer[z] * 0.6)) tile.dirt = Math.min(1, tile.dirt + dt * 0.8); // grime creeps back
+        if (Math.random() < 0.25) sfx('glass', { vol: 0.25 }) || sfx('tick', { vol: 0.3 });
+      } else if (tile.dirt < 1 && (tile.cleanFor += dt) > (4 - Math.min(3, g.layer[z] * 0.6)) / hard) tile.dirt = Math.min(1, tile.dirt + dt * 0.8); // grime creeps back
       total[z]++;
       if (tile.dirt > 0.5) left[z]++;
       tmp.position.set(tile.x, tile.y, 0);
@@ -51,7 +54,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
       if (t >= 0 && left[p] <= total[p] * 0.04) { // spotless: bonus, and a tougher layer drops in
         g.scores[p] += 20; g.layer[p]++; g.said[p] = t + 1.2;
         tiles.forEach((tile) => tile.zone === p && ((tile.dirt = 1), (tile.cleanFor = 0)));
-        blip(990, 0.3, 'triangle'); hud.flash('#e0f2fe');
+        sfx('confirmation'); hud.flash('#e0f2fe');
       }
       hud.p('h', p, t < 0 ? 'Scrub it clean' : g.said[p] > t ? 'Sparkling! +20' : `${Math.round(100 - (100 * left[p]) / total[p])}% clean`);
     }

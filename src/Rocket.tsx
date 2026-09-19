@@ -1,15 +1,18 @@
 // Rocket — every squat is a burn. Go deeper for a bigger kick; stop squatting and gravity wins.
 // Score is the highest altitude you reach. One body-width of floor each, so it is compact.
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { players, tuning } from './pose.ts';
-import { H, PLAYER_COLORS, Stage, W, blip, useBursts, useRound, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { hardness } from './meta.ts';
+import { H, PLAYER_COLORS, Stage, W, music, sfx, useBursts, useRound, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const ROUND = 45, STARS = 90, GRAVITY = 5, DRAG = 0.35;
 const starGeo = new THREE.CircleGeometry(0.05, 6), tmp = new THREE.Object3D();
 
-function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
+function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const hard = hardness(stage); // heavier gravity on higher stages
+  useLayoutEffect(() => { music.start('calm', undefined, 0.5); return () => music.stop(); }, []);
   const rockets = useRef<(THREE.Group | null)[]>([]), grounds = useRef<(THREE.Mesh | null)[]>([]);
   const stars = useMemo(() => {
     const mesh = new THREE.InstancedMesh(starGeo, new THREE.MeshBasicMaterial({ color: '#e4e4e7' }), STARS);
@@ -31,9 +34,9 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
       else if (g.down[p] && pl.lift > -tuning.standBand) {
         const depth = Math.min(1, (tuning.crouch - g.deepest[p]) / 0.6);
         g.down[p] = false; g.deepest[p] = 0;
-        if (t >= 0) { g.vel[p] += 8 + 7 * depth; g.reps[p]++; blip(180 + 200 * depth, 0.25, 'sawtooth'); bursts.burst(x, -2.6, 0.5, '#fb923c', 16 + 16 * depth, 6); }
+        if (t >= 0) { g.vel[p] += 8 + 7 * depth; g.reps[p]++; sfx('laser', { vol: 0.5, rate: 0.5 + depth * 0.4 }); sfx('impactSoft_heavy', { vol: 0.6 }); bursts.burst(x, -2.6, 0.5, '#fb923c', 16 + 16 * depth, 6); }
       }
-      g.vel[p] -= (GRAVITY + DRAG * g.vel[p]) * dt;
+      g.vel[p] -= (GRAVITY * hard + DRAG * g.vel[p]) * dt;
       g.alt[p] = Math.max(0, g.alt[p] + g.vel[p] * dt);
       if (g.alt[p] === 0) g.vel[p] = Math.max(0, g.vel[p]);
       g.best[p] = Math.max(g.best[p], g.alt[p]);
@@ -58,6 +61,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
     });
     stars.mesh.instanceMatrix.needsUpdate = true;
     bursts.update(dt);
+    music.intensity(0.3 + Math.max(g.vel[0], g.vel[1]) / 20);
   });
 
   return (
