@@ -1,6 +1,6 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, handInZone, leanOf, limbAngles, poseMatch, tuning } from './pose.ts';
+import { assignSlots, handInZone, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
 
 // A body: shoulders 0.1 apart (camera frame, aspect 1) centred at cx, wrists wherever we put them.
@@ -40,6 +40,14 @@ const tPose = [Math.PI, Math.PI, 0, 0, -1.6, -1.6, -1.5, -1.5];
 assert.equal(poseMatch(tPose, tPose), 100);
 assert.equal(poseMatch(tPose, tPose.map((a, i) => (i < 2 ? -Math.PI + 0.01 : a))), 100);
 assert.equal(poseMatch(tPose, tPose.map((a, i) => (i < 4 ? a + Math.PI / 2 : a))), 0);
+
+// One-Euro: a jittering still hand is calmed at least 3x; a fast move is followed with little lag.
+const still = new OneEuro(() => 1.2, () => 3), fast = new OneEuro(() => 1.2, () => 3);
+let spread = 0, out = 0;
+for (let k = 0; k < 120; k++) { out = still.next(0.5 + (k % 2 ? 0.02 : -0.02), 1 / 30); if (k > 30) spread = Math.max(spread, Math.abs(out - 0.5)); }
+assert.ok(spread < 0.02 / 3, `jitter only reduced to ${spread}`);
+for (let k = 0; k < 30; k++) out = fast.next(k / 10, 1 / 30); // 3 zone-units per second
+assert.ok(2.9 - out < 0.25, `lagging ${2.9 - out} behind a fast hand`);
 
 // Streak: consecutive goal-days, still alive if today hasn't been played yet.
 const at = (daysAgo: number, points: number) =>
