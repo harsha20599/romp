@@ -10,7 +10,7 @@
 body { background: var(--ground); color: var(--ink); font: 1.4rem/1.5 Inter, system-ui, sans-serif; overflow: hidden; user-select: none; }
 video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.22; }
 
-.screen { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 2rem; padding: 3rem 4rem; }
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 1.4rem; padding: 2.4rem 4rem; }
 h1 { font-size: 2.8rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
 h2 { font-size: 1.6rem; font-weight: 600; color: var(--ink-muted); }
 .row { display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; }
@@ -29,11 +29,14 @@ button:hover, button.hot { background: var(--hover); border-color: var(--border-
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button[aria-pressed='true'] { border-color: var(--accent-ink); color: var(--accent-ink); }
 button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
-button.card { text-align: left; min-width: 24rem; padding: 2rem; border-radius: 1rem; }
-button.card small { display: block; color: var(--ink-muted); font-weight: 400; }
+button.small { min-width: 0; color: var(--ink-muted); }
+.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.2rem; }
+button.card { text-align: left; min-width: 0; min-height: 11rem; align-self: stretch; padding: 2rem; border-radius: 1rem; }
+button.card { font-size: 1.8rem; font-weight: 600; }
+button.card small { font-size: 1.2rem; margin-top: 0.4rem; display: block; color: var(--ink-muted); font-weight: 400; }
 
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border); }
+th, td { text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); }
 th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
 
 /* Hand cursor: ring fills while dwelling on a button. */
@@ -50,5 +53,8 @@ th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
 .hud { position: absolute; top: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #000; }
 .hud.clock { left: 50%; transform: translateX(-50%); font-size: 3.2rem; }
 .hud.score { font-size: 2.8rem; }
-.hud.p1, .hud.solo { left: 3rem; color: #818cf8; }
+.hud.hint { top: 6.2rem; font-size: 2rem; color: var(--ink); }
+.hud.hint.solo { left: 50%; transform: translateX(-50%); top: 6.6rem; }
+button:disabled { opacity: 0.4; }
+.hud.p1, .hud.score.solo { left: 3rem; color: #818cf8; }
 .hud.p2 { right: 3rem; color: #34d399; }
