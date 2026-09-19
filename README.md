@@ -18,3 +18,12 @@ Two ways in, both serving the same `dist/` — run `npm run build` to publish a 
   that address and is Enabled.
 
 Tuning knobs: `tuning` in `src/pose.ts`.
+
+## Assets and sound
+
+All models, sound effects and the announcer are CC0 — see `CREDITS.md`. Sounds are grouped into families by file
+name in `public/assets/audio.json`; after adding `.ogg` files, rebuild it:
+
+```bash
+node -e "const fs=require('fs'),o={};for(const d of['sfx','voice','jingles'])for(const f of fs.readdirSync('public/assets/'+d).filter(f=>f.endsWith('.ogg')).sort()){const k=d==='sfx'?f.replace(/\.ogg$/,'').replace(/_?\d+$/,''):d==='voice'?'say_'+f.replace(/\.ogg$/,''):f.includes('HIT')?'jingle_win':'jingle_level';(o[k]??=[]).push(d+'/'+f)}fs.writeFileSync('public/assets/audio.json',JSON.stringify(o))"
+```

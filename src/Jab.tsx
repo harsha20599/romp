@@ -1,11 +1,12 @@
 // Jab — punch the pads before they close, duck under the bar. A pad wants the hand on its own side;
 // a gold "cross" pad wants the opposite hand, so you twist. Hard punches score extra.
 // Pads sit inside each player's own zone, so together-play stays shoulder-wide.
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { players, tuning } from './pose.ts';
-import { H, Stage, blip, comboText, scoreHud, useBursts, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { hardness } from './meta.ts';
+import { H, Stage, comboText, hitSound, music, sfx, scoreHud, useBursts, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const ROUND = 60, PAD_R = 0.9, PAD_LIFE = 1.6, PADS = 6;
 const PUNCH_SPEED = 5; // stage units/s a hand must be moving when it lands — tune on device
@@ -14,7 +15,8 @@ const padGeo = new THREE.CircleGeometry(PAD_R, 32), ringGeo = new THREE.RingGeom
 
 type Pad = { zone: number; x: number; y: number; life: number; pop: number; hand: number; cross: boolean };
 
-function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
+function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+  const hard = hardness(stage);
   const pads = useMemo<Pad[]>(() => Array.from({ length: PADS * n }, (_, i) => ({ zone: i % n, x: 0, y: 0, life: 0, pop: 0, hand: 0, cross: false })), [n]);
   const padMeshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null)[]>([]);
   const ringMeshes = useRef<(THREE.Mesh | null)[]>([]);
@@ -22,7 +24,8 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
   const g = useRef({ spawnIn: [0.5, 0.5], side: [1, -1], scores: [0, 0], combo: [0, 0], barAt: BAR_EVERY, ducked: [false, false] }).current;
   const hands = useHands(n), bursts = useBursts();
   const said = useRef([{ text: '', until: 0 }, { text: '', until: 0 }]).current;
-  const tick = useRound(hud, ROUND, () => onEnd(g.scores.slice(0, n)));
+  const tick = useRound(hud, ROUND, () => { music.stop(); onEnd(g.scores.slice(0, n)); });
+  useLayoutEffect(() => { music.start('arcade'); return () => music.stop(); }, []);
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
@@ -31,12 +34,12 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
     if (t >= 0)
       for (let z = 0; z < n; z++) {
         if ((g.spawnIn[z] -= dt) > 0) continue;
-        g.spawnIn[z] = 0.95 - 0.45 * (t / ROUND);
+        g.spawnIn[z] = (0.95 - 0.45 * (t / ROUND)) / hard;
         const pad = pads.find((p) => p.zone === z && p.life <= 0 && p.pop <= 0);
         if (!pad) continue;
         g.side[z] = -g.side[z];
         const cross = t > 10 && Math.random() < 0.25, side = g.side[z] < 0 ? 0 : 1;
-        Object.assign(pad, { cross, hand: cross ? 1 - side : side, life: PAD_LIFE * (cross ? 1.3 : 1), x: zoneX(n, z) + g.side[z] * zoneHalf(n) * (0.3 + Math.random() * 0.35), y: Math.random() * 3.2 - 0.2 });
+        Object.assign(pad, { cross, hand: cross ? 1 - side : side, life: (PAD_LIFE * (cross ? 1.3 : 1)) / Math.sqrt(hard), x: zoneX(n, z) + g.side[z] * zoneHalf(n) * (0.3 + Math.random() * 0.35), y: Math.random() * 3.2 - 0.2 });
       }
 
     hands.update(dt).forEach((h, i) => {
@@ -47,7 +50,8 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
       pad.life = 0;
       pad.pop = 0.2;
       g.scores[h.p] += (pad.cross ? 3 : 1) + (pow ? 1 : 0) + Math.floor(++g.combo[h.p] / 5);
-      blip((pow ? 140 : 220) + 30 * Math.min(g.combo[h.p], 12), pow ? 0.12 : 0.06, 'square');
+      hitSound(pow ? 'impactPunch_heavy' : 'impactPunch_medium', g.combo[h.p], pow ? 1 : 0.7);
+      if (pow) hud.shake(0.5);
       bursts.burst(pad.x, pad.y, 0.5, pad.cross ? '#fde047' : '#f43f5e', pow ? 28 : 12, pow ? 10 : 6);
       if (pow) said[h.p] = { text: 'Pow!', until: t + 0.6 };
     });
@@ -64,7 +68,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
     if (barIn <= -BAR_LIVE) {
       for (let p = 0; p < n; p++) {
         if (!players[p].present) continue;
-        if (g.ducked[p]) { g.scores[p] += 3; blip(660, 0.15); } else { g.scores[p] = Math.max(0, g.scores[p] - 2); g.combo[p] = 0; blip(90, 0.3); hud.flash('#fbbf24'); }
+        if (g.ducked[p]) { g.scores[p] += 3; sfx('phaseJump', { vol: 0.5 }); } else { g.scores[p] = Math.max(0, g.scores[p] - 2); g.combo[p] = 0; sfx('impactMetal_heavy'); hud.flash('#fbbf24'); hud.shake(); }
       }
       g.ducked = [false, false];
       g.barAt = t + BAR_EVERY;
@@ -85,6 +89,7 @@ function Scene({ n, onEnd, hud }: GameProps & { hud: Hud }) {
       m.material.color.set(pad.cross ? '#fde047' : pad.zone ? '#34d399' : '#f43f5e');
     });
     bursts.update(dt);
+    music.intensity(0.3 + Math.max(g.combo[0], g.combo[1]) / 14);
     scoreHud(hud, n, g.scores);
   });
 

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { assignSlots, handInZone, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
+import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
 
 // A body: shoulders 0.1 apart (camera frame, aspect 1) centred at cx, wrists wherever we put them.
 const body = (cx: number, sw = 0.1, wrist = { x: cx, y: 0.5 }) => {
@@ -57,5 +58,25 @@ assert.equal(summary([at(0, DAY_GOAL - 1), at(2, DAY_GOAL)], 'A').streak, 0);
 assert.equal(summary([at(0, 30), at(0, 30)], 'A').today, 60);
 assert.equal(summary([at(0, 30)], 'B').total, 0);
 assert.equal(summary([at(0, 30), at(6, 30), at(8, 30)], 'A').week, 60);
+
+// Progression: stars come from score vs stage goals; two stars open the next stage; XP and levels follow.
+assert.deepEqual(starGoals('slice', 1), [25, 50, 80]);
+assert.equal(starsFor('slice', 1, 60), 2);
+assert.ok(starGoals('slice', 3)[0] > 25);
+const played = (game: string, stage: number, score: number, points = 40, daysAgo = 0) => {
+  const stars = starsFor(game, stage, score);
+  return { t: Date.now() - daysAgo * 864e5, game, who: 'A', score, points, stage, stars, xp: sessionXp({ points, stars, stage, newBest: false }) };
+};
+const log = [played('slice', 1, 60), played('slice', 2, 10), played('jab', 1, 5)];
+assert.equal(bestStars(log, 'A', 'slice', 1), 2);
+assert.equal(unlockedStage(log, 'A', 'slice'), 2); // 2 stars on stage 1 opens stage 2, but stage 2 has none yet
+assert.equal(unlockedStage(log, 'A', 'jab'), 1);
+assert.equal(xpOf(log, 'A'), 40 + 40 + 40 + 40 + 10); // three sessions' points, two stars, one stage-2 bonus
+assert.deepEqual([levelOf(0).level, levelOf(59).level, levelOf(60).level, levelOf(240).level], [1, 1, 2, 3]);
+assert.ok(badgesOf(log, 'A').includes('first') && badgesOf(log, 'A').includes('century') && !badgesOf(log, 'A').includes('explorer'));
+const daily = dailyChallenges(log, 'A', {});
+assert.equal(daily.length, 3);
+assert.deepEqual(daily.map((c) => c.id), dailyChallenges([], 'B', {}).map((c) => c.id)); // same three for everyone, all day
+assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
 
 console.log('ok');
