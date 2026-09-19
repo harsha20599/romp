@@ -2,11 +2,10 @@
 // a gold "cross" pad wants the opposite hand, so you twist. Hard punches score extra.
 // Pads sit inside each player's own zone, so together-play stays shoulder-wide.
 import { useLayoutEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { players, tuning } from './pose.ts';
+import { isLow, players } from './pose.ts';
 import { hardness } from './meta.ts';
-import { H, Stage, comboText, hitSound, music, sfx, scoreHud, useBursts, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { H, Stage, comboText, hitSound, hitStop, swept, useTick, music, sfx, scoreHud, useBursts, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const ROUND = 60, PAD_R = 0.9, PAD_LIFE = 1.6, PADS = 6;
 const PUNCH_SPEED = 5; // stage units/s a hand must be moving when it lands — tune on device
@@ -27,7 +26,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
   const tick = useRound(hud, ROUND, () => { music.stop(); onEnd(g.scores.slice(0, n)); });
   useLayoutEffect(() => { music.start('arcade'); return () => music.stop(); }, []);
 
-  useFrame((_, rawDt) => {
+  useTick((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null) return;
 
@@ -44,14 +43,14 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
 
     hands.update(dt).forEach((h, i) => {
       if (!h.on || h.speed < PUNCH_SPEED) return;
-      const pad = pads.find((p) => p.zone === h.p && p.life > 0 && p.hand === (i & 1) && Math.hypot(p.x - h.x, p.y - h.y) < PAD_R);
+      const pad = pads.find((p) => p.zone === h.p && p.life > 0 && p.hand === (i & 1) && swept(h, p.x, p.y, PAD_R * 1.1, 4)); // a punch travels ~half a pad per frame: test the path, not the point
       if (!pad) return;
       const pow = h.speed > PUNCH_SPEED * 2.2;
       pad.life = 0;
       pad.pop = 0.2;
       g.scores[h.p] += (pad.cross ? 3 : 1) + (pow ? 1 : 0) + Math.floor(++g.combo[h.p] / 5);
       hitSound(pow ? 'impactPunch_heavy' : 'impactPunch_medium', g.combo[h.p], pow ? 1 : 0.7);
-      if (pow) hud.shake(0.5);
+      if (pow) { hud.shake(0.5); hitStop(70); }
       bursts.burst(pad.x, pad.y, 0.5, pad.cross ? '#fde047' : '#f43f5e', pow ? 28 : 12, pow ? 10 : 6);
       if (pow) said[h.p] = { text: 'Pow!', until: t + 0.6 };
     });
@@ -59,7 +58,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     // The bar: warn, go live, and anyone who crouched at any moment while it was live is safe.
     const barIn = g.barAt - t, live = barIn <= 0 && barIn > -BAR_LIVE;
     for (let p = 0; p < n; p++) {
-      if (live && players[p].lift < tuning.crouch) g.ducked[p] = true;
+      if (live && isLow(players[p])) g.ducked[p] = true;
       const cross = pads.some((pad) => pad.zone === p && pad.life > 0 && pad.cross);
       hud.p('h', p, barIn < BAR_WARN && barIn > -BAR_LIVE ? 'Duck!' : said[p].until > t ? said[p].text : cross ? 'Cross!' : comboText(g.combo[p]));
       const bar = barMeshes.current[p];

@@ -2,13 +2,13 @@
 // duck the beams, dodge the crate stacks, sweep up coins, grab power-ups. Forest on the early stages, city later.
 // Two runners side by side share one obstacle sequence, so together-play is a fair race. Lean + vertical only: compact.
 import { useLayoutEffect, useMemo, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { players, tuning } from './pose.ts';
+import { isAir, isLow, players } from './pose.ts';
 import { hardness } from './meta.ts';
-import { PLAYER_COLORS, Stage, hitSound, music, say, scoreHud, sfx, useBursts, useFitted, useRound, type GameProps, type Hud } from './stage.tsx';
+import { PLAYER_COLORS, Stage, hitSound, hitStop, useTick, music, say, scoreHud, sfx, useBursts, useFitted, useRound, type GameProps, type Hud } from './stage.tsx';
 
 const ROUND = 75, FAR = -70, LANE = 1.7, WINDOW = 1.1, POWER_TIME = 8;
 const A = '/assets/kit/', C = '/assets/city/';
@@ -110,7 +110,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     });
   };
 
-  useFrame((_, rawDt) => {
+  useTick((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null) return;
     const speed = (13 + 9 * Math.max(0, t / ROUND)) * hard, move = speed * dt;
@@ -120,7 +120,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
 
     for (let p = 0; p < n; p++) {
       const pl = players[p], R = runners[p], list = world.things[p];
-      const air = pl.lift > tuning.jump, low = pl.lift < tuning.crouch;
+      const air = isAir(pl), low = isLow(pl); // from the moment the move is clearly under way, not when it completes
       // Analog steering: the runner is wherever your body puts it, continuously — with a gentle pull toward the
       // nearest lane centre so you settle into lanes instead of hovering on the lines.
       const free = pl.steer * LANE * 1.1, target = free + (Math.round(free / LANE) * LANE - free) * 0.35;
@@ -131,8 +131,20 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
       R.holder.rotation.z = -pl.steer * 0.3 + (g.hurt[p] > 0 ? Math.sin(t * 40) * 0.15 : 0); // the robot leans as you lean
       R.holder.rotation.y = (target - R.x) * -0.25;
       R.bubble.visible = g.shield[p];
+      // The runner is your body, continuously: it sinks as you start to bend and stretches as you rise, before any
+      // jump or duck has "triggered" — so the screen answers the first centimetre of every move.
+      const bend = Math.max(-0.3, Math.min(0.12, pl.lift * 0.4));
+      R.holder.scale.set(1 - bend * 0.5, 1 + bend, 1);
       const want = air ? 'Jump' : low ? 'Sitting' : 'Running';
-      if (want !== R.now) { R.act[R.now].fadeOut(0.12); R.act[want].reset().fadeIn(0.12).play(); R.now = want; }
+      if (want !== R.now) {
+        R.act[R.now].fadeOut(0.08); R.act[want].reset().fadeIn(0.08).play();
+        // Every move is answered the instant it is seen: a whoosh and dust at take-off, a thud on landing, a scrape into the slide.
+        if (t >= 0 && pl.present) {
+          sfx(want === 'Jump' ? 'maximize' : want === 'Sitting' ? 'minimize' : 'impactSoft_heavy', { vol: want === 'Running' ? 0.3 : 0.45 });
+          if (want !== 'Sitting') bursts.burst(trackX(p) + R.x, 0.15, 0.3, '#e7e5e4', 10, 3);
+        }
+        R.now = want;
+      }
       R.act.Running.timeScale = speed / 11;
       R.mixer.update(dt);
 
@@ -174,7 +186,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
             else if (g.shield[p]) { g.shield[p] = false; sfx('impactGlass_heavy'); bursts.burst(trackX(p) + R.x, 1.2, 0, '#f472b6', 40, 10); g.said[p] = { text: 'Shield saved you', until: t + 1.2 }; }
             else {
               g.combo[p] = 0; g.hurt[p] = 0.5;
-              sfx(th.kind === 'beam' ? 'impactMetal_heavy' : 'impactWood_heavy'); hud.shake(); hud.flash('#ef4444');
+              sfx(th.kind === 'beam' ? 'impactMetal_heavy' : 'impactWood_heavy'); hud.shake(); hud.flash('#ef4444'); hitStop(110);
               bursts.burst(trackX(p) + R.x, 1.2, 0, th.kind === 'beam' ? '#22d3ee' : '#b45309', 40, 11); // the obstacle goes to splinters
               th.obj.visible = false;
             }

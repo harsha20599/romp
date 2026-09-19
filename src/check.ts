@@ -1,6 +1,6 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, frameClock, handInZone, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
+import { assignSlots, frameClock, handInZone, isAir, isLow, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
 
@@ -106,6 +106,14 @@ assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
   assert.equal(frameClock().time(0, 5000), 5000); // first frame: no history, so its age reads zero
   const odd = frameClock(); odd.time(1e6, 100);
   assert.equal(odd.time(1e6 - 900, 200), 200); // a timestamp that implies a 1s-old frame is nonsense: fall back to arrival
+}
+
+// Intent: a squat that is clearly under way already counts; a slow sag, or standing up fast out of one, does not.
+{
+  const at = (lift: number, liftV: number) => ({ lift, liftV }) as Parameters<typeof isLow>[0];
+  assert.ok(isLow(at(-0.3, -2.5)) && !isLow(at(-0.3, -0.3)) && !isLow(at(-0.1, -2.5)) && isLow(at(-0.7, 0)));
+  assert.ok(isAir(at(0.15, 2.5)) && !isAir(at(0.15, 0.4)) && !isAir(at(0.05, 3)) && isAir(at(0.4, -1)));
+  assert.ok(!isAir(at(-0.4, 3))); // driving up out of a squat is not a jump
 }
 
 console.log('ok');

@@ -4,30 +4,30 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { players, tuning, type Player } from './pose.ts';
+import { isAir, isLow, players, tuning, type Player } from './pose.ts';
 import { hardness } from './meta.ts';
-import { COUNTDOWN, H, Stage, audio, comboText, countdown, hitSound, music, say, scoreHud, useBursts, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { COUNTDOWN, H, Stage, audio, inputLag, comboText, countdown, hitSound, music, say, scoreHud, useBursts, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const BPM = 104, BEAT = 60 / BPM, ROUND = 60, FALL = 2.4; // FALL = seconds a note is on screen before its beat
 const HIT_Y = -2.8, WINDOW = 0.26, PERFECT = 0.11; // seconds either side of the beat
-const LATENCY = 0.12; // ponytail: one guess for camera + TV lag, shifts the judged window later. Make it a calibration screen if it feels off.
+const HOLD = 1.5; // a move must have been started this recently to count: getting into it early is fine, standing there with a hand up all round is not
 const up = (pl: Player, h: number) => pl.hands[h].seen && pl.hands[h].y > tuning.handUp;
 const disc = new THREE.CircleGeometry(0.55, 24), wide = new THREE.PlaneGeometry(3.4, 0.55), tri = new THREE.CircleGeometry(0.7, 3);
 const MOVES = [
   { hint: 'Left up', color: '#818cf8', lane: -0.7, geo: disc, ok: (pl: Player) => up(pl, 0) && !up(pl, 1) },
   { hint: 'Right up', color: '#34d399', lane: 0.7, geo: disc, ok: (pl: Player) => up(pl, 1) && !up(pl, 0) },
   { hint: 'Both up', color: '#fbbf24', lane: 0, geo: wide, ok: (pl: Player) => up(pl, 0) && up(pl, 1) },
-  { hint: 'Squat', color: '#f43f5e', lane: 0, geo: tri, ok: (pl: Player) => pl.lift < tuning.crouch },
-  { hint: 'Jump', color: '#22d3ee', lane: 0, geo: tri, ok: (pl: Player) => pl.lift > tuning.jump },
+  { hint: 'Squat', color: '#f43f5e', lane: 0, geo: tri, ok: isLow },
+  { hint: 'Jump', color: '#22d3ee', lane: 0, geo: tri, ok: isAir },
 ];
 
 // One move every two beats, then every beat for the second half; never the same move twice running.
 const chart = (hard: number) => {
-  const notes: { at: number; move: number; best: number[]; judged: boolean }[] = [];
+  const notes: { at: number; move: number; best: number[]; state: number[]; judged: boolean }[] = []; // state per player: 0 waiting, 1 in the move early, 2 scored
   for (let b = 4, last = -1; b * BEAT < ROUND - 1; b += b * BEAT < ROUND / 2 / hard ? 2 : 1) {
     let move = Math.floor(Math.random() * MOVES.length);
     if (move === last) move = (move + 1) % MOVES.length;
-    notes.push({ at: b * BEAT, move: (last = move), best: [Infinity, Infinity], judged: false });
+    notes.push({ at: b * BEAT, move: (last = move), best: [Infinity, Infinity], state: [0, 0], judged: false });
   }
   return notes;
 };
@@ -37,7 +37,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
   const meshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null)[]>([]);
   const lines = useRef<(THREE.Mesh | null)[]>([]);
   const bursts = useBursts();
-  const g = useRef({ start: audio().currentTime + COUNTDOWN, scores: [0, 0], combo: [0, 0], said: ['', ''], saidUntil: [0, 0], done: false, last: 0 }).current;
+  const g = useRef({ start: audio().currentTime + COUNTDOWN, scores: [0, 0], combo: [0, 0], said: ['', ''], saidUntil: [0, 0], done: false, last: 0, since: [MOVES.map(() => -9), MOVES.map(() => -9)] }).current;
   useLayoutEffect(() => { music.start('beat', g.start, 0.6); return () => music.stop(); }, [g]); // the band starts on the game's beat zero
   const laneX = (p: number, lane: number) => zoneX(n, p) + lane * zoneHalf(n) * 0.55;
 
@@ -52,12 +52,31 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     const pulse = 1 + 0.6 * Math.max(0, 1 - ((((t % BEAT) + BEAT) % BEAT) / BEAT) * 3); // the line kicks on every beat
     lines.current.forEach((l) => l?.scale.set(1, pulse, 1));
 
+    // What the game sees now, the player did `lag` ago: the measured tracking delay, plus how late they hear the band.
+    const lag = inputLag() + (audio().outputLatency || 0);
+    const doing = [0, 1].map((p) => MOVES.map((move, k) => { const ok = move.ok(players[p]); if (!ok) g.since[p][k] = t; return ok && t - g.since[p][k] < HOLD; }));
+    // Scored the instant it is earned — the sound and the burst land on the beat, not a quarter-second after it.
+    const score = (note: (typeof notes)[number], p: number, off: number) => {
+      const perfect = off < PERFECT, move = MOVES[note.move];
+      note.state[p] = 2; note.best[p] = off;
+      g.scores[p] += (perfect ? 2 : 1) + Math.floor(++g.combo[p] / 5);
+      hitSound(perfect ? 'select' : 'click', g.combo[p], 0.6);
+      bursts.burst(laneX(p, move.lane), HIT_Y, 0.5, move.color, perfect ? 24 : 10);
+      g.said[p] = perfect ? 'Perfect!' : 'Good'; g.saidUntil[p] = t + 0.45;
+    };
+
     const next = notes.find((note) => !note.judged);
     notes.forEach((note, i) => {
-      const due = note.at - (t - LATENCY), move = MOVES[note.move];
+      const due = note.at - (t - lag), move = MOVES[note.move];
       for (let p = 0; p < n; p++) {
-        if (Math.abs(due) < WINDOW && move.ok(players[p])) note.best[p] = Math.min(note.best[p], Math.abs(due));
-        const m = meshes.current[i * n + p], hit = note.best[p] < Infinity;
+        if (note.state[p] < 2 && Math.abs(due) < WINDOW && players[p].present) {
+          const ok = doing[p][note.move];
+          // In the move early? Hold it and it turns Perfect as the note arrives; let go first and it was only Good.
+          if (ok && due <= PERFECT) score(note, p, note.state[p] === 1 ? 0 : Math.abs(due));
+          else if (ok) note.state[p] = 1;
+          else if (note.state[p] === 1) score(note, p, due);
+        }
+        const m = meshes.current[i * n + p], hit = note.state[p] === 2;
         if (!m) continue;
         m.visible = note.at - t < FALL && due > -WINDOW - 0.15;
         m.position.set(laneX(p, move.lane), HIT_Y + ((note.at - t) / FALL) * (H / 2 - HIT_Y), 0);
@@ -69,14 +88,9 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
       note.judged = true;
       for (let p = 0; p < n; p++) {
         if (!players[p].present) continue;
-        const perfect = note.best[p] < PERFECT;
-        if (note.best[p] < Infinity) {
-          g.scores[p] += (perfect ? 2 : 1) + Math.floor(++g.combo[p] / 5);
-          hitSound(perfect ? 'select' : 'click', g.combo[p], 0.6);
-          bursts.burst(laneX(p, move.lane), HIT_Y, 0.5, move.color, perfect ? 24 : 10);
-        } else g.combo[p] = 0;
-        g.said[p] = note.best[p] < Infinity ? (perfect ? 'Perfect!' : 'Good') : 'Miss';
-        g.saidUntil[p] = t + 0.45;
+        if (note.state[p] === 2) continue;
+        if (note.state[p] === 1) { score(note, p, WINDOW); continue; } // held it right through: late, but it counts
+        g.combo[p] = 0; g.said[p] = 'Miss'; g.saidUntil[p] = t + 0.45;
       }
     });
     for (let p = 0; p < n; p++)

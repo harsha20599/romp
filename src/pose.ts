@@ -10,6 +10,7 @@ export type Player = {
   hands: [Hand, Hand]; // [screen-left, screen-right]
   energy: number;
   lift: number; // shoulder-widths above the player's own standing height: >0 jumping, <0 crouching
+  liftV: number; // …and how fast that is changing, shoulder-widths per second — a squat is obvious long before it is deep
   steer: number; // -1..1 analog left/right: leaning and side-stepping both count, whichever the player does
   lean: number; // shoulders' sideways offset from the hips, in shoulder-widths; >0 = toward screen-right
   body: number[][]; // all 33 landmarks as [x, y, visibility], mirrored, in camera-frame units — for the presence figure and the Tracking screen
@@ -41,6 +42,7 @@ export const tuning = {
   handHold: 0.25, // seconds a hand keeps its last position after tracking loses it — stops flicker
   jump: 0.3, // lift above this = in the air
   crouch: -0.6, // lift below this = ducking
+  riseFast: 1.5, dropFast: 1.2, // lift speed (shoulder-widths/s) that says "this is a jump / a squat" once it is 40% of the way there
   leanOver: 0.3, // |lean| above this = leaning
   handUp: 0.5, // hand y above this = raised
   freezeStill: 1.5, // Freeze: movement rate (shoulder-widths of limb travel per second) that counts as "you moved"
@@ -60,6 +62,7 @@ const mkPlayer = (): Player => ({
   body: [],
   palms: [],
   lift: 0,
+  liftV: 0,
   steer: 0,
   lean: 0,
   angles: null,
@@ -128,6 +131,12 @@ export function poseMatch(a: number[], b: number[]) {
   const err = a.reduce((sum, v, i) => sum + Math.abs(Math.atan2(Math.sin(v - b[i]), Math.cos(v - b[i]))) * (i < 4 ? 2 : 1), 0) / 12 / (Math.PI / 180);
   return Math.round(Math.max(0, Math.min(100, (50 - err) * 2.5)));
 }
+
+// Intent, not position. A squat takes ~400ms to reach the crouch line, and by then the beam has passed. But a squat
+// *starts* unmistakably: the shoulders are already dropping fast when they are less than halfway down. So a move counts
+// from the moment it is clearly under way — which is when the player feels they made it — not when it completes.
+export const isAir = (pl: Player) => pl.lift > tuning.jump || (pl.lift > tuning.jump * 0.4 && pl.liftV > tuning.riseFast);
+export const isLow = (pl: Player) => pl.lift < tuning.crouch || (pl.lift < tuning.crouch * 0.4 && pl.liftV < -tuning.dropFast);
 
 // Biggest n bodies play; left-to-right on screen = P1, P2.
 export function assignSlots(poses: NormalizedLandmark[][], aspect: number, n: number) {
@@ -206,6 +215,7 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
     if (Math.abs(lift) < tuning.standBand) { st.y += (raw.y - st.y) * 0.02; st.since = now; }
     else if (now - st.since > 4000) st.y = raw.y; // out of band for 4s = they moved, not a 4s squat
     pl.lift = F.lift.next(lift, dt);
+    pl.liftV = F.lift.dx;
     pl.lean = F.lean.next(leanOf(lm, aspect), dt);
     // Steering: where you started is centre (re-learned very slowly, ~20s, so it follows you across a session
     // but not across a lane change). Lean and side-step add up, so either way of "going left" works.
@@ -433,6 +443,7 @@ function startSim() {
     for (const pl of players.slice(0, nPlayers)) {
       pl.present = true;
       pl.lift = keys.has('ArrowUp') ? 0.6 : keys.has('ArrowDown') ? -1 : 0;
+      pl.liftV = 0;
       pl.lean = keys.has('ArrowRight') ? 0.6 : keys.has('ArrowLeft') ? -0.6 : 0;
       pl.steer = Math.sign(pl.lean);
       pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, vx: 0, vy: 0, seen: true, t: performance.now() };

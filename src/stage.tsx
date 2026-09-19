@@ -1,13 +1,13 @@
 // What every game shares: the 16:9 stage + HUD, the round clock, sound, and the players' hands.
 // R3F rules kept here: nothing per-frame goes through React state; HUD is DOM text written via refs.
 import { Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Canvas, useFrame, useThree, type CameraProps } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, type CameraProps, type RootState } from '@react-three/fiber';
 import { PerformanceMonitor, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
-import { players, predict } from './pose.ts';
-import { blip, say, sfx } from './audio.ts';
-export { audio, blip, jingle, music, say, sfx } from './audio.ts';
+import { players, predict, sim, track } from './pose.ts';
+import { blip, say, sfx, whoosh } from './audio.ts';
+export { audio, blip, jingle, music, say, sfx, whoosh } from './audio.ts';
 
 export const W = 16, H = 9, COUNTDOWN = 3;
 export const PLAYER_COLORS = ['#818cf8', '#34d399'];
@@ -21,6 +21,16 @@ export type Hud = ((key: HudKey, text: string) => void) & { flash: (color: strin
 // The shell's hook into a running game: a tap or click anywhere on the stage asks to pause, and while paused the
 // frame loop stops (so every game's clock stops with it). Context, so no game has to know any of this exists.
 export const Shell = createContext({ paused: false, pause: () => {} });
+
+// How long ago the player actually did what the game is only now seeing: measured camera-to-tracker age, plus a
+// flat allowance for smoothing, one render frame and the TV. Timing games judge against the past by this much.
+export const inputLag = () => (sim ? 0 : Math.max(0.06, Math.min(0.3, (track.lag + 45) / 1000)));
+
+// Hit-stop: on a big impact the game's clock all but stops for a few frames. It reads as weight, and it puts the
+// feedback exactly where the eye is. Games that want it run their loop through useTick instead of useFrame.
+const slow = { until: 0, k: 1 };
+export const hitStop = (ms = 70, k = 0.06) => { slow.until = performance.now() + ms; slow.k = k; };
+export const useTick = (fn: (state: RootState, dt: number) => void) => useFrame((state, dt) => fn(state, performance.now() < slow.until ? dt * slow.k : dt));
 
 // A player's zone on the orthographic stage: the whole width solo, a half each together.
 export const zoneHalf = (n: number) => W / 2 / n;
@@ -186,13 +196,14 @@ export function useBursts() {
 }
 
 // Hands on the stage: a cursor and a tapering ribbon each. `update(dt)` moves them and returns where they are.
-const TRAIL = 12;
+const TRAIL = 12, SPAN = 5;
 const cursorGeo = new THREE.SphereGeometry(0.18, 12, 8);
-export type StageHand = { p: number; x: number; y: number; px: number; py: number; speed: number; on: boolean };
+export type StageHand = { p: number; x: number; y: number; px: number; py: number; speed: number; on: boolean; pts: Float32Array };
 
 // `map` places the zones; the default is the orthographic stage split into n columns.
 export type HandMap = { cx: (p: number) => number; hw: number; hh: number; cy?: number };
-export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw: zoneHalf(n), hh: H / 2 }) {
+// `swing`: hand speed (stage units/s) that earns a whoosh the moment it is reached; 0 = silent hands.
+export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw: zoneHalf(n), hh: H / 2 }, swing = 6) {
   const hands = useMemo(
     () =>
       Array.from({ length: n * 2 }, (_, i) => {
@@ -202,12 +213,14 @@ export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw:
         const ribbon = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
         const cursor = new THREE.Mesh(cursorGeo, new THREE.MeshBasicMaterial({ color }));
         ribbon.frustumCulled = false; // rewritten every frame; cached bounds would be stale
-        return { ribbon, cursor, pts: new Float32Array(TRAIL * 2), state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false } as StageHand };
+        const pts = new Float32Array(TRAIL * 2);
+        return { ribbon, cursor, pts, age: new Float32Array(TRAIL), armed: true, state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false, pts } as StageHand };
       }),
     [n],
   );
   const update = (dt: number) =>
-    hands.map(({ ribbon, cursor, pts, state: s }, i) => {
+    hands.map((own, i) => {
+      const { ribbon, cursor, pts, age, state: s } = own;
       const hand = players[s.p].hands[i & 1], was = s.on;
       s.on = ribbon.visible = cursor.visible = players[s.p].present && hand.seen;
       if (!s.on) return s;
@@ -219,11 +232,18 @@ export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw:
       s.py = was ? s.y : ty;
       s.x = s.px + (tx - s.px) * k;
       s.y = s.py + (ty - s.py) * k;
-      s.speed = Math.hypot(hand.vx * map.hw, hand.vy * map.hh);
       cursor.position.set(s.x, s.y, 1);
-      if (was) pts.copyWithin(2, 0, (TRAIL - 1) * 2);
-      else for (let k = 0; k < TRAIL; k++) pts.set([s.x, s.y], k * 2);
+      if (was) { pts.copyWithin(2, 0, (TRAIL - 1) * 2); age.copyWithin(1, 0, TRAIL - 1); for (let k = 1; k < TRAIL; k++) age[k] += dt; }
+      else for (let k = 0; k < TRAIL; k++) { pts.set([s.x, s.y], k * 2); age[k] = k ? 1 : 0; }
       pts.set([s.x, s.y], 0);
+      age[0] = 0;
+      // Speed: the tracker's own estimate is steady but slow off the mark (it is low-passed, ~60ms) — a swing was
+      // through the fruit before it "counted" as fast. So also measure straight across the last few drawn positions
+      // (net distance, so jitter around a still hand reads as nothing) and believe whichever is higher.
+      const across = Math.hypot(pts[0] - pts[2 * SPAN], pts[1] - pts[2 * SPAN + 1]) / Math.max(0.03, age[SPAN]);
+      s.speed = Math.max(Math.hypot(hand.vx * map.hw, hand.vy * map.hh), age[SPAN] < 0.25 ? across : 0);
+      if (swing && own.armed && s.speed > swing) { own.armed = false; whoosh(Math.min(1, s.speed / swing / 3)); }
+      else if (s.speed < swing * 0.5) own.armed = true; // one whoosh per swing: re-arms only once the hand has slowed right down
       const pos = ribbon.geometry.attributes.position as THREE.BufferAttribute;
       for (let k = 0; k < TRAIL; k++) {
         const a = Math.max(k - 1, 0) * 2, b = Math.min(k + 1, TRAIL - 1) * 2;
@@ -236,6 +256,14 @@ export function useHands(n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw:
     });
   const nodes = hands.map((h, i) => <group key={i}><primitive object={h.ribbon} /><primitive object={h.cursor} /></group>);
   return { update, nodes };
+}
+
+// Did this hand's recent path pass within r of (x, y)? Looks back over the last few drawn positions (~100ms), not
+// just this frame's step: a hand is often through the target a moment before it registers as "fast enough", and the
+// player rightly feels that as a hit. Forgiving on purpose — use segDist on the last step alone for things to avoid.
+export function swept(h: StageHand, x: number, y: number, r: number, steps = 6) {
+  for (let k = 0; k < steps; k++) if (segDist(x, y, h.pts[2 * k + 2], h.pts[2 * k + 3], h.pts[2 * k], h.pts[2 * k + 1]) <= r) return true;
+  return false;
 }
 
 // Distance from point p to segment a→b — "did this swing pass through that thing".

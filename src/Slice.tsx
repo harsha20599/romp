@@ -2,10 +2,10 @@
 // (two clipped copies of the same mesh), the halves tumble apart and the flesh-coloured cut faces turn to the camera.
 // Stars are worth 5, bombs cost 5, the last 10 seconds are a frenzy. Solo owns the stage; together, a half each.
 import { useLayoutEffect, useMemo, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { hardness } from './meta.ts';
-import { H, Stage, comboText, hitSound, music, scoreHud, segDist, sfx, useBursts, useFitted, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { H, Stage, comboText, hitSound, music, scoreHud, hitStop, segDist, swept, useTick, sfx, useBursts, useFitted, useHands, useRound, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
 
 const R = 0.75, GRAVITY = -9, ROUND = 60, POOL = 18, FRENZY = 10;
 const SLICE_SPEED = 5; // stage units/s a hand must move to cut — tune on device
@@ -60,7 +60,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
   const tick = useRound(hud, ROUND, () => { music.stop(); onEnd(g.scores.slice(0, n)); });
   useLayoutEffect(() => { music.start('arcade'); return () => music.stop(); }, []);
 
-  useFrame((_, rawDt) => {
+  useTick((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null) return;
     const frenzy = t > ROUND - FRENZY;
@@ -83,8 +83,10 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     for (const h of hands.update(dt)) {
       if (t < 0 || !h.on || h.speed < SLICE_SPEED) continue;
       for (const pc of pieces) {
-        if (pc.state !== 'whole' || pc.zone !== h.p || segDist(pc.x, pc.y, h.px, h.py, h.x, h.y) > R * 1.2) continue;
+        // Fruit is judged kindly (anywhere along the last ~100ms of the swing); a bomb only if this very step went through its core.
+        if (pc.state !== 'whole' || pc.zone !== h.p || !(pc.kind === 'bomb' ? segDist(pc.x, pc.y, h.px, h.py, h.x, h.y) < R * 0.9 : swept(h, pc.x, pc.y, R * 1.25))) continue;
         if (pc.kind === 'bomb') {
+          hitStop(130);
           pc.state = 'off';
           g.scores[h.p] = Math.max(0, g.scores[h.p] - 5); g.combo[h.p] = 0;
           sfx('impactPlate_heavy'); sfx('lowDown', { vol: 0.6 }); hud.flash('#ef4444'); hud.shake(1.5); bursts.burst(pc.x, pc.y, 0.5, '#ef4444', 50, 12);
@@ -92,6 +94,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
         }
         g.scores[h.p] += (pc.kind === 'star' ? 5 : 1) + Math.floor(++g.combo[h.p] / 5);
         hitSound(pc.kind === 'star' ? 'powerUp' : 'impactSoft_heavy', g.combo[h.p], 0.7);
+        if (pc.kind === 'star' || g.combo[h.p] % 5 === 0) hitStop(pc.kind === 'star' ? 80 : 50); // the blade bites
         if (pc.kind === 'star') { pc.state = 'off'; bursts.burst(pc.x, pc.y, 0.5, '#fde047', 36, 9); continue; }
         // The cut: `along` is the swipe direction; each half keeps one side of the plane through the fruit's centre.
         const len = Math.hypot(h.x - h.px, h.y - h.py) || 1;

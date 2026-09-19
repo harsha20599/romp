@@ -23,7 +23,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     return m;
   }, []);
   const g = useRef({ scores: [0, 0], layer: [0, 0], said: [0, 0], painted: [-1, -1] }).current;
-  const hands = useHands(n), bursts = useBursts();
+  const hands = useHands(n, undefined, 0), bursts = useBursts();
   const tick = useRound(hud, ROUND, () => onEnd(g.scores.slice(0, n)));
 
   useFrame((_, rawDt) => {

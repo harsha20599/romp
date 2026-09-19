@@ -35,6 +35,27 @@ export function blip(freq: number, dur = 0.08, type: OscillatorType = 'sine', at
   o.stop(at + dur);
 }
 
+// A swing through the air: filtered noise, swept upward, louder and brighter the harder the swing. Played the instant
+// a fast hand is seen — before it has hit anything — so every movement the player makes is answered straight away.
+let noise: AudioBuffer | undefined;
+function whiteNoise() { // one second of it, shared by the whoosh and the drum kit
+  if (!noise) { noise = audio().createBuffer(1, audio().sampleRate, audio().sampleRate); noise.getChannelData(0).forEach((_, i, a) => (a[i] = Math.random() * 2 - 1)); }
+  return noise;
+}
+export function whoosh(power = 0.5) {
+  const c = audio(), at = c.currentTime, dur = 0.16;
+  const src = c.createBufferSource(), band = c.createBiquadFilter(), g = c.createGain();
+  src.buffer = whiteNoise();
+  band.type = 'bandpass'; band.Q.value = 1.2;
+  band.frequency.setValueAtTime(500 + 500 * power, at);
+  band.frequency.exponentialRampToValueAtTime(1800 + 2200 * power, at + dur);
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(0.1 + 0.22 * power, at + 0.04);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  src.connect(band).connect(g).connect(fxBus);
+  src.start(at); src.stop(at + dur);
+}
+
 // Play one of a family's samples at random, slightly re-pitched each time so repeats never sound machine-gunned.
 export function sfx(family: string, { vol = 0.8, rate = 1, jitter = 0.08 } = {}) {
   const set = buffers.get(family);
@@ -78,11 +99,9 @@ const THEMES = {
 export type Theme = keyof typeof THEMES;
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 
-let noise: AudioBuffer | undefined;
 function hit(at: number, dur: number, vol: number, highpass: number) {
-  if (!noise) { noise = audio().createBuffer(1, audio().sampleRate, audio().sampleRate); noise.getChannelData(0).forEach((_, i, a) => (a[i] = Math.random() * 2 - 1)); }
   const src = audio().createBufferSource(), f = audio().createBiquadFilter(), g = audio().createGain();
-  src.buffer = noise;
+  src.buffer = whiteNoise();
   f.type = 'highpass';
   f.frequency.value = highpass;
   g.gain.setValueAtTime(vol, at);

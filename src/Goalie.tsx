@@ -32,7 +32,18 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     if (t === null) return;
     const ease = Math.max(0, t) / ROUND;
 
-    hands.update(dt).forEach((h, i) => gloves.current[i]?.setNextKinematicTranslation({ x: h.on ? h.x : 0, y: h.on ? h.y : -40, z: 0.2 }));
+    hands.update(dt).forEach((h, i) => {
+      // A keeper's hands close on the ball by themselves in the last instant. So does the glove: if it is already near
+      // where a shot is about to land, it is drawn onto the spot — which also swallows the tracker's last few cm of noise.
+      let x = h.x, y = h.y;
+      for (const s of shots) {
+        const d = Math.hypot(s.tx - x, s.ty - y);
+        if (s.state !== 'in' || s.zone !== h.p || s.left > 0.45 || d > GLOVE_R * 2) continue;
+        const pull = 0.65 * (1 - s.left / 0.45);
+        x += (s.tx - x) * pull; y += (s.ty - y) * pull;
+      }
+      gloves.current[i]?.setNextKinematicTranslation({ x: h.on ? x : 0, y: h.on ? y : -40, z: 0.2 });
+    });
 
     if (t >= 0)
       for (let z = 0; z < n; z++) {
