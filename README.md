@@ -19,6 +19,17 @@ Two ways in, both serving the same `dist/` — run `npm run build` to publish a 
 
 Tuning knobs: `tuning` in `src/pose.ts`.
 
+## Test builds and field numbers
+
+A test build runs beside the live one without touching it: a git worktree on its own branch, built into its own
+`dist/`, served by `node serve.mjs 5191` (`romp-next.service`) and fronted by `tailscale serve --https 8446`. A different
+port is a different origin, so the test build has its own saved stats — the live ones are safe.
+
+`serve.mjs` also takes `POST /report`: the app posts what it measured — tracker speed 15 s after start, frame pacing
+after every round (`p50/p95/p99/worst`, shaders built mid-round), and, only when "Record 12 s" is pressed on the Tracking
+screen, a tape of raw landmarks for filter tuning. They land in `reports/` (git-ignored). Never camera pictures. On the
+live static servers the POST simply fails and nothing is sent.
+
 ## Assets and sound
 
 All models, sound effects and the announcer are CC0 — see `CREDITS.md`. Sounds are grouped into families by file

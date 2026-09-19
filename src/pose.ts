@@ -49,6 +49,8 @@ export const tuning = {
   energyPerPoint: 12, // shoulder-widths of summed limb travel per activity point
   model: (stored('romp.model') === 'lite' ? 'lite' : 'full') as 'lite' | 'full', // full: steadier wrists, a few ms slower. Switchable on the Tracking screen.
   sharp: stored('romp.sharp') === 'on', // short camera exposure: sharper fast hands, darker picture. Needs a well-lit room.
+  direct: stored('romp.frames') !== 'copied', // stream camera frames straight into the tracker (off = copy them out of the <video>, the old route)
+  fastCam: stored('romp.cam') !== 'standard', // take the camera's 60fps mode when it has one, even at a smaller picture
 };
 
 const mkPlayer = (): Player => ({
@@ -223,7 +225,7 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
 }
 
 // camFps vs the pose fps tells you which side is the bottleneck; grab = copying the frame out, model = the tracker itself.
-export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0 };
+export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0, frames: '' }; // frames: 'direct' (streamed to the tracker) or 'copied'
 
 // Fist-to-press. The pose model cannot see fingers, so while a menu wants it (`want`), the palm of the pointing hand
 // is cropped out of the frame and sent to a hand model after each pose result. Games never set `want`: zero cost in play.
@@ -237,18 +239,24 @@ export async function startPose(video: HTMLVideoElement) {
   // frame's exposure is shorter, which is what keeps a fast hand from smearing.
   const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720, frameRate: { ideal: 60 } } });
   video.srcObject = stream;
-  track.camera = await tuneCamera(stream.getVideoTracks()[0]);
+  const cam = stream.getVideoTracks()[0];
+  track.camera = await tuneCamera(cam);
   await video.play();
   const model = `/models/pose_landmarker_${tuning.model}.task`;
-  if (!(await startWorker(video, model).catch(() => false))) await startInline(video, model);
+  if (!(await startWorker(video, model, cam).catch(() => false))) await startInline(video, model);
 }
 
 // A smeared hand cannot be tracked accurately by any model, so where the camera allows it we take control of the
 // exposure: short shutter (sharp motion), gain pushed up to compensate. Opt-in ("Sharp motion"), because in a dim
 // room the darker, noisier picture costs more accuracy than the blur did. Every step is best-effort.
 async function tuneCamera(cam: MediaStreamTrack) {
-  const caps = (cam.getCapabilities?.() ?? {}) as Record<string, { min: number; max: number } & string[]>, set = cam.getSettings();
-  const note = [`${set.width}×${set.height} @${Math.round(set.frameRate ?? 0)}`];
+  const caps = (cam.getCapabilities?.() ?? {}) as Record<string, { min: number; max: number } & string[]>, fastest = Math.round(caps.frameRate?.max ?? 0);
+  // A 60fps mode halves both the wait for the next frame and the blur inside each one. That is worth a smaller
+  // picture (the tracker only ever looks at a 256px crop of the player) — but never below 480 lines.
+  if (tuning.fastCam && fastest >= 50 && (cam.getSettings().frameRate ?? 0) < 50)
+    await cam.applyConstraints({ frameRate: { min: 50 }, height: { min: 480, ideal: 720 }, aspectRatio: { ideal: 16 / 9 } }).catch(() => {});
+  const set = cam.getSettings();
+  const note = [`${set.width}×${set.height} @${Math.round(set.frameRate ?? 0)}${fastest ? ` (camera max ${fastest})` : ''}`];
   const tryApply = (advanced: Record<string, unknown>) => cam.applyConstraints({ advanced: [advanced] } as MediaTrackConstraints).then(() => true, () => false);
   if (caps.focusMode?.includes('continuous')) await tryApply({ focusMode: 'continuous' });
   if (!tuning.sharp) return note.join(' · ');
@@ -260,25 +268,47 @@ async function tuneCamera(cam: MediaStreamTrack) {
   return note.join(' · ');
 }
 
-// Preferred: inference in a worker. Frames are handed over as ImageBitmaps, one in flight at a time, so the
-// worker always gets the newest frame and the main thread never waits on the model.
+// Not in TypeScript's DOM library yet.
+declare const MediaStreamTrackProcessor: undefined | (new (init: { track: MediaStreamTrack; maxBufferSize?: number }) => { readable: ReadableStream });
+
+// A streamed frame carries a timestamp on the capture pipeline's clock, not the page's. The offset between the two
+// is constant, and it is pinned down in two steps. A frame cannot arrive before it was taken, so the largest
+// (timestamp − arrival) ever seen is the offset, short by the quickest delivery (a few ms). Then the page's own video
+// callback — which does report each frame's capture time on the page clock — names the exact frame: whichever
+// recent capture time sits within that few-ms window of the estimate is the same frame, and that pair is exact.
+export function frameClock() {
+  let loose = -Infinity, exact = NaN;
+  const seenAt: number[] = [];
+  return {
+    saw(captureTime: number) { seenAt.push(captureTime); if (seenAt.length > 8) seenAt.shift(); },
+    time(ts: number, arrived: number) {
+      loose = Math.max(loose, ts - arrived);
+      for (const cap of seenAt) { const d = ts - loose - cap; if (d > -2 && d < 10) { exact = ts - cap; break; } }
+      const t = ts - (Number.isNaN(exact) ? loose : exact);
+      return arrived - t >= 0 && arrived - t < 300 ? t : arrived; // a nonsense timestamp must never reach the predictor
+    },
+  };
+}
+
+// Preferred: inference in a worker, fed straight from the camera. Where the browser can stream a camera track into a
+// worker, the page never touches a pixel: no copy, and no dependence on a main thread that is busy drawing the game.
+// Otherwise frames are copied out of the <video> as ImageBitmaps, one in the tracker and the newest waiting behind it.
 let worker: Worker | undefined;
-async function startWorker(video: HTMLVideoElement, model: string) {
+async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStreamTrack) {
   if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return false;
   const w = new Worker(new URL('./pose.worker.ts', import.meta.url));
   const ready = await new Promise<string | null>((resolve) => {
     const giveUp = setTimeout(() => resolve(null), 25000);
     w.onerror = () => resolve(null);
     w.onmessage = (e) => (e.data.type === 'ready' || e.data.type === 'failed') && (clearTimeout(giveUp), resolve(e.data.type === 'ready' ? e.data.delegate : null));
-    w.postMessage({ type: 'init', origin: location.origin, model, n: nPlayers });
+    w.postMessage({ type: 'init', origin: location.origin, timeOrigin: performance.timeOrigin, model, n: nPlayers });
   });
   if (!ready) return w.terminate(), false;
   worker = w;
   perf.delegate = `${ready} worker`;
-  // One frame is in the tracker, and the newest camera frame waits right behind it. The moment a result comes back
-  // the waiting frame goes in — the tracker never idles until the next camera frame, which used to lock it to every
-  // second frame (15fps) whenever a model run took longer than one frame.
-  let busy = false, last = performance.now(), sent = 0, lastCam = 0, waiting: { bitmap: ImageBitmap; t: number } | null = null;
+
+  const clock = frameClock();
+  let busy = false, last = performance.now(), sent = 0, lastCam = 0, copying = false, aspect = 16 / 9, waiting: { bitmap: ImageBitmap; t: number } | null = null;
   const send = (frame: { bitmap: ImageBitmap; t: number }) => {
     busy = true;
     sent = frame.t = Math.max(sent + 1, frame.t); // the model wants strictly increasing timestamps
@@ -286,6 +316,7 @@ async function startWorker(video: HTMLVideoElement, model: string) {
   };
   w.onmessage = (e) => {
     const m = e.data;
+    if (m.type === 'nostream') return void (copying = true, track.frames = 'copied');
     if (m.type === 'hand') {
       grip.busy = false;
       if (!m.found) return;
@@ -297,20 +328,33 @@ async function startWorker(video: HTMLVideoElement, model: string) {
     if (m.type !== 'pose') return;
     busy = false;
     if (waiting) { send(waiting); waiting = null; }
-    const now = performance.now();
-    apply(m.landmarks, video.videoWidth / video.videoHeight, m.t);
+    const now = performance.now(), t = m.ts === undefined ? m.t : clock.time(m.ts, m.arrived);
+    aspect = m.aspect ?? video.videoWidth / video.videoHeight;
+    apply(m.landmarks, aspect, t);
+    tape?.push([Math.round(t), Math.round(now - t), m.landmarks.map((lm: NormalizedLandmark[]) => lm.flatMap((q) => [+q.x.toFixed(4), +q.y.toFixed(4), +(q.visibility ?? 1).toFixed(2)]))]);
     perf.fps += (1000 / (now - last) - perf.fps) * 0.1;
-    track.lag += (now - m.t - track.lag) * 0.1;
+    track.lag += (now - t - track.lag) * 0.1;
     track.modelMs += (m.ms - track.modelMs) * 0.1;
     last = now;
-    void askGrip(video, w);
+    if (copying) void askGrip(video, w); else w.postMessage({ type: 'grip', rect: gripRect(aspect, 1) });
   };
+  if (tuning.direct && typeof MediaStreamTrackProcessor === 'function')
+    try {
+      const { readable } = new MediaStreamTrackProcessor({ track: cam, maxBufferSize: 1 });
+      w.postMessage({ type: 'stream', readable }, [readable as unknown as Transferable]);
+      track.frames = 'direct';
+    } catch { copying = true; }
+  else copying = true;
+  if (copying) track.frames = 'copied';
   // `captureTime` is when the sensor took the frame (same clock as performance.now): true frame spacing for the
   // speed estimate, and the true age of every reading for prediction — not the jittery moment the callback ran.
+  // On the direct route this callback only keeps the clock; on the copy route it also lifts the frame out.
   const tick = async (now: number, meta?: VideoFrameCallbackMetadata) => {
     video.requestVideoFrameCallback(tick);
     track.camFps += (1000 / Math.max(1, now - lastCam) - track.camFps) * 0.1;
     lastCam = now;
+    if (meta?.captureTime) clock.saw(meta.captureTime);
+    if (!copying) return;
     const t0 = performance.now(), bitmap = await createImageBitmap(video).catch(() => null);
     if (!bitmap) return;
     track.grabMs += (performance.now() - t0 - track.grabMs) * 0.1;
@@ -323,18 +367,32 @@ async function startWorker(video: HTMLVideoElement, model: string) {
   return true;
 }
 
-// Crop a square around the pointing hand's palm (1.8 shoulder-widths across: the whole hand with margin, whatever the
-// distance), scaled to the hand model's input size, and hand it to the worker.
-async function askGrip(video: HTMLVideoElement, w: Worker) {
+// A square around the pointing hand's palm (1.8 shoulder-widths across: the whole hand with margin, whatever the
+// distance), as fractions of the unmirrored camera frame: [x, y, size ÷ frame width]. null = nobody is asking.
+function gripRect(vw: number, vh: number) {
   const pl = players[0], palmAt = pl.palms[grip.hand];
-  if (!grip.want || grip.busy || !pl.present || !pl.hands[grip.hand].seen || !palmAt) return;
-  const vw = video.videoWidth, vh = video.videoHeight, [ls, rs] = [pl.body[11], pl.body[12]];
-  const size = Math.round(Math.max(96, Math.min(vh, 1.8 * Math.hypot((ls[0] - rs[0]) * vw, (ls[1] - rs[1]) * vh))));
-  const sx = Math.round(Math.max(0, Math.min(vw - size, (1 - palmAt[0]) * vw - size / 2)));  // palms are stored mirrored; the frame is not
-  const sy = Math.round(Math.max(0, Math.min(vh - size, palmAt[1] * vh - size / 2)));
+  if (!grip.want || !pl.present || !pl.hands[grip.hand].seen || !palmAt) return null;
+  const [ls, rs] = [pl.body[11], pl.body[12]];
+  const size = Math.max(96 / 720 * vh, Math.min(vh, 1.8 * Math.hypot((ls[0] - rs[0]) * vw, (ls[1] - rs[1]) * vh)));
+  const sx = Math.max(0, Math.min(vw - size, (1 - palmAt[0]) * vw - size / 2)); // palms are stored mirrored; the frame is not
+  return [sx / vw, Math.max(0, Math.min(vh - size, palmAt[1] * vh - size / 2)) / vh, size / vw];
+}
+// Copy route only: cut the crop out of the <video> here and hand it over.
+async function askGrip(video: HTMLVideoElement, w: Worker) {
+  const vw = video.videoWidth, vh = video.videoHeight, rect = grip.busy ? null : gripRect(vw, vh);
+  if (!rect) return;
   grip.busy = true;
-  const bitmap = await createImageBitmap(video, sx, sy, size, size, { resizeWidth: 224, resizeHeight: 224, resizeQuality: 'medium' }).catch(() => null);
+  const px = Math.round(rect[2] * vw);
+  const bitmap = await createImageBitmap(video, Math.round(rect[0] * vw), Math.round(rect[1] * vh), px, px, { resizeWidth: 224, resizeHeight: 224, resizeQuality: 'medium' }).catch(() => null);
   if (bitmap) w.postMessage({ type: 'hand', bitmap }, [bitmap]); else grip.busy = false;
+}
+
+// A tuning tape: every raw tracker result for a few seconds — [capture time, age on arrival, landmarks per body].
+// Replayed on the build machine, it lets the filters be tuned against the real player in the real room.
+let tape: unknown[] | null = null;
+export function record(seconds: number) {
+  tape = [];
+  return new Promise<unknown[]>((resolve) => setTimeout(() => { resolve(tape ?? []); tape = null; }, seconds * 1000));
 }
 
 // Fallback: the original main-thread path, for browsers where the worker route is not available.

@@ -52,6 +52,8 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
       shield: (lanes) => { const h = heart.clone(); h.position.set(lanes[0] * LANE, 1.3, 0); return h; },
       double: (lanes) => { const s = star.clone(); s.position.set(lanes[0] * LANE, 1.3, 0); return s; },
     };
+    // One of each, hidden: the stage warms up whatever is in the scene before "Go", so the first barrel costs nothing.
+    (Object.keys(build) as Kind[]).forEach((kind) => { const o = build[kind]([0]); o.visible = false; root.add(o); });
     // Scenery: a conveyor of props down both sides, recycled to the far end as they pass the camera.
     const originals = [p0, p1, p2, p3, p4, p5], scenery = Array.from({ length: 28 }, (_, i) => {
       const o = originals[i % 6].clone(), side = i % 2 ? 1 : -1;

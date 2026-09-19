@@ -1,7 +1,7 @@
 // What every game shares: the 16:9 stage + HUD, the round clock, sound, and the players' hands.
 // R3F rules kept here: nothing per-frame goes through React state; HUD is DOM text written via refs.
-import { Suspense, createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Canvas, type CameraProps } from '@react-three/fiber';
+import { Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Canvas, useFrame, useThree, type CameraProps } from '@react-three/fiber';
 import { PerformanceMonitor, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
@@ -25,6 +25,42 @@ export const Shell = createContext({ paused: false, pause: () => {} });
 // A player's zone on the orthographic stage: the whole width solo, a half each together.
 export const zoneHalf = (n: number) => W / 2 / n;
 export const zoneX = (n: number, p: number) => (n === 1 ? 0 : (p - 0.5) * (W / 2));
+
+// Everything a round will ever draw is compiled and uploaded before "Go". Pooled things start hidden, and three.js
+// only builds a shader / uploads a mesh or texture the first time it is actually drawn — which used to be mid-round,
+// as a dropped frame the first time a bomb or a power-up appeared. So: one throwaway render with everything forced
+// visible, into a 1px offscreen target (the player never sees it), then a compile pass for the on-screen variant.
+function Warm() {
+  const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    const hidden: THREE.Object3D[] = [], culled: THREE.Object3D[] = [], target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+    scene.traverse((o) => { if (!o.visible) hidden.push(o); if (o.frustumCulled) culled.push(o); o.visible = true; o.frustumCulled = false; });
+    gl.setRenderTarget(target);
+    gl.render(scene, camera);
+    gl.setRenderTarget(null);
+    for (const o of hidden) o.visible = false;
+    for (const o of culled) o.frustumCulled = true;
+    gl.compile(scene, camera);
+    target.dispose();
+    pace.programs = gl.info.programs?.length ?? 0;
+  }, [gl, scene, camera]);
+  return null;
+}
+
+// Frame pacing, measured where it matters — on the device, during a real round. Read out by the shell after each game.
+export const pace = { dts: [] as number[], programs: 0, late: 0 };
+function Pace() {
+  const gl = useThree((s) => s.gl);
+  useFrame(({ clock }, dt) => { if (clock.elapsedTime > 2 && pace.dts.length < 30000) pace.dts.push(dt * 1000); // the first 2s are the countdown: loading and warm-up live there on purpose
+    pace.late = (gl.info.programs?.length ?? 0) - pace.programs; });
+  return null;
+}
+export function paceSummary() {
+  const d = pace.dts.sort((a, b) => a - b), at = (q: number) => +(d[Math.floor((d.length - 1) * q)] ?? 0).toFixed(1);
+  const out = { frames: d.length, p50: at(0.5), p95: at(0.95), p99: at(0.99), worst: at(1), over34ms: d.filter((v) => v > 34).length, shadersBuiltMidRound: pace.late };
+  pace.dts = [];
+  return out;
+}
 
 export function Stage({ n, camera, children }: { n: number; camera?: CameraProps; children: (hud: Hud) => ReactNode }) {
   const els = useRef<Record<string, HTMLElement | null>>({}), shown = useRef<Record<string, string>>({});
@@ -53,7 +89,8 @@ export function Stage({ n, camera, children }: { n: number; camera?: CameraProps
         <PerformanceMonitor onDecline={() => setLean(true)} />
         <ambientLight intensity={1.2} />
         <directionalLight position={[3, 5, 8]} intensity={2} />
-        <Suspense fallback={null}>{children(hud)}</Suspense>
+        <Suspense fallback={null}>{children(hud)}<Warm /></Suspense>
+        <Pace />
         {effects.on && !lean && <EffectComposer multisampling={0}><Bloom intensity={0.7} luminanceThreshold={0.55} luminanceSmoothing={0.2} mipmapBlur /></EffectComposer>}
       </Canvas>
       {el('flash', 'flash')}{el('clock', 'clock')}{el('big', 'big')}
@@ -123,6 +160,7 @@ export function useBursts() {
     const mesh = new THREE.InstancedMesh(bitGeo, new THREE.MeshBasicMaterial(), MAX_BITS);
     mesh.frustumCulled = false;
     mesh.count = MAX_BITS;
+    mesh.setColorAt(0, tint); // per-instance colour from the first frame: adding it at the first hit meant a new shader, built mid-round
     return { mesh, bits: Array.from({ length: MAX_BITS }, () => ({ life: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 })), at: 0 };
   }, []);
   const burst = (x: number, y: number, z: number, color: string, count = 14, speed = 6) => {

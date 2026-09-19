@@ -2,11 +2,12 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { createRoot } from 'react-dom/client';
-import { grip, perf, players, predict, setPlayers, sim, startPose, track, tuning } from './pose.ts';
+import { grip, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
+import { report } from './report.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
-import { PLAYER_COLORS, Shell, audio, effects, jingle, say, sfx, type GameProps } from './stage.tsx';
+import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, say, sfx, type GameProps } from './stage.tsx';
 import Slice from './Slice.tsx';
 import Run from './Run.tsx';
 import Jab from './Jab.tsx';
@@ -224,7 +225,7 @@ function TrackerDetail() {
   const [, tick] = useState(0);
   useEffect(() => { const id = setInterval(() => tick((v) => v + 1), 500); return () => clearInterval(id); }, []);
   const blind = performance.now() - grip.seenAt > 1500;
-  return <>camera {track.camFps.toFixed(0)} fps · frame copy {track.grabMs.toFixed(0)} ms · model {track.modelMs.toFixed(0)} ms · hand: {blind ? 'not found' : `${grip.closed ? 'FIST' : 'open'} (curl ${grip.curl.toFixed(2)})`}</>;
+  return <>camera {track.camFps.toFixed(0)} fps · frames {track.frames === 'direct' ? 'direct' : `copied ${track.grabMs.toFixed(0)} ms`} · model {track.modelMs.toFixed(0)} ms · hand: {blind ? 'not found' : `${grip.closed ? 'FIST' : 'open'} (curl ${grip.curl.toFixed(2)})`}</>;
 }
 
 function App() {
@@ -272,10 +273,19 @@ function App() {
     try { await startPose(video.current!); } catch (e) {
       return setError(`Camera or tracker failed: ${(e as Error).message}. Allow the camera — and if this is the http://192.168… address, add it under chrome://flags → “Insecure origins treated as secure” first.`);
     }
+    setTimeout(() => report('tracker'), 15000); // once the numbers have settled
     go({ at: 'home' });
+  };
+  // Ten seconds of raw tracker output, sent to the build machine: the filters get tuned against the real player.
+  const [taping, setTaping] = useState('');
+  const tape = async () => {
+    setTaping('Recording — wave, slice, punch, then hold still…');
+    report('tape', await record(12));
+    setTaping('Sent. Thank you!');
   };
 
   const finish = (run: Round, gameScores: number[]) => {
+    report('round', { game: run.game.id, stage: run.stage, players: n, glow: effects.on, ...paceSummary() });
     const earned = gameScores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
     const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned];
     if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points });
@@ -491,6 +501,27 @@ function App() {
                 <button aria-pressed={tuning.sharp} onClick={() => setTracker('romp.sharp', 'on')}>On</button>
               </div>
               <span className="dim">Short exposure. Needs a bright room.</span>
+            </div>
+            <div className="row">
+              <span className="label">Camera speed</span>
+              <div className="seg">
+                <button aria-pressed={tuning.fastCam} onClick={() => setTracker('romp.cam', 'fastest')}>Fastest</button>
+                <button aria-pressed={!tuning.fastCam} onClick={() => setTracker('romp.cam', 'standard')}>Standard</button>
+              </div>
+              <span className="dim">60 fps, if the camera can.</span>
+            </div>
+            <div className="row">
+              <span className="label">Frames</span>
+              <div className="seg">
+                <button aria-pressed={tuning.direct} onClick={() => setTracker('romp.frames', 'direct')}>Direct</button>
+                <button aria-pressed={!tuning.direct} onClick={() => setTracker('romp.frames', 'copied')}>Copied</button>
+              </div>
+              <span className="dim">Compare the ms above.</span>
+            </div>
+            <div className="row">
+              <span className="label">Tuning</span>
+              <button disabled={taping.startsWith('Rec')} onClick={tape}>Record 12 s</button>
+              <span className="dim">{taping || 'Sends raw tracking to the build machine.'}</span>
             </div>
           </div>
         </div>

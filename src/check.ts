@@ -1,6 +1,6 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, handInZone, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
+import { assignSlots, frameClock, handInZone, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
 
@@ -91,5 +91,21 @@ const daily = dailyChallenges(log, 'A', {});
 assert.equal(daily.length, 3);
 assert.deepEqual(daily.map((c) => c.id), dailyChallenges([], 'B', {}).map((c) => c.id)); // same three for everyone, all day
 assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
+
+// Streamed frames are stamped on the capture pipeline's clock. frameClock must recover each frame's capture time on
+// the page clock: roughly from arrivals alone, exactly once the page's video callback has named a frame.
+{
+  const OFFSET = 1_559_908_897.8, clock = frameClock(), cap = (k: number) => 1000 + k * 33.3;
+  // Frames 0–4: no callback yet. Delivery takes 3–8ms; frame 2 sat behind a 40ms model run.
+  const rough = [5, 3, 48, 8, 4].map((delay, k) => clock.time(cap(k) + OFFSET, cap(k) + delay));
+  rough.forEach((t, k) => assert.ok(k === 0 || (t >= cap(k) && t - cap(k) <= 3.01), `arrival-only estimate is late by at most the quickest delivery (${t - cap(k)})`));
+  // The callback reports frames 5 and 6 (and an older one): from then on the answer is exact, even for a frame it never saw.
+  [3, 5, 6].forEach((k) => clock.saw(cap(k)));
+  assert.ok(Math.abs(clock.time(cap(6) + OFFSET, cap(6) + 30) - cap(6)) < 1e-6);
+  assert.ok(Math.abs(clock.time(cap(9) + OFFSET, cap(9) + 6) - cap(9)) < 1e-6);
+  assert.equal(frameClock().time(0, 5000), 5000); // first frame: no history, so its age reads zero
+  const odd = frameClock(); odd.time(1e6, 100);
+  assert.equal(odd.time(1e6 - 900, 200), 200); // a timestamp that implies a 1s-old frame is nonsense: fall back to arrival
+}
 
 console.log('ok');
