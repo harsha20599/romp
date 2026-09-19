@@ -70,7 +70,7 @@ function App() {
     // Fullscreen first: it needs the tap's user-activation, which is gone once the camera prompt and model load finish.
     try { void document.documentElement.requestFullscreen().catch(() => {}); } catch { /* not supported — play windowed */ }
     try { await startPose(video.current!); } catch (e) {
-      return setError(`Camera or tracker failed: ${(e as Error).message}. Open this page as http://localhost (adb reverse) and allow the camera.`);
+      return setError(`Camera or tracker failed: ${(e as Error).message}. Allow the camera — and if this is the http://192.168… address, add it under chrome://flags → “Insecure origins treated as secure” first.`);
     }
     go({ at: 'home' });
   };
