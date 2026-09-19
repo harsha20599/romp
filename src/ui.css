@@ -1,0 +1,54 @@
+/* House tokens (smartqueue/DESIGN.md, dark scheme, accent Indigo) at ~2x: read from 3m, not a desk.
+   1rem = 1/96 of the width, so the whole shell scales with whatever display HDMI gives us. */
+:root {
+  --ground: #09090b; --raised: #131316; --hover: #1c1c20; --border: #27272a; --border-strong: #3f3f46;
+  --ink: #fafafa; --ink-muted: #a1a1aa; --ink-subtle: #8b8b93;
+  --accent: #4f46e5; --accent-ink: #818cf8; --success: #4ade80;
+  font-size: calc(100vw / 96);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--ground); color: var(--ink); font: 1.4rem/1.5 Inter, system-ui, sans-serif; overflow: hidden; user-select: none; }
+video.mirror { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.22; }
+
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 2rem; padding: 3rem 4rem; }
+h1 { font-size: 2.8rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+h2 { font-size: 1.6rem; font-weight: 600; color: var(--ink-muted); }
+.row { display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.muted { color: var(--ink-muted); }
+.num { font-variant-numeric: tabular-nums; }
+.error { color: #f87171; }
+
+/* Buttons are big because the pointer is a hand three metres away. */
+button {
+  font: inherit; font-weight: 500; color: var(--ink); background: var(--raised);
+  border: 1px solid var(--border); border-radius: 0.8rem; padding: 1.2rem 2rem; min-width: 12rem; cursor: pointer;
+  transition: background 120ms ease-out, border-color 120ms ease-out;
+}
+button:hover, button.hot { background: var(--hover); border-color: var(--border-strong); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button[aria-pressed='true'] { border-color: var(--accent-ink); color: var(--accent-ink); }
+button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+button.card { text-align: left; min-width: 24rem; padding: 2rem; border-radius: 1rem; }
+button.card small { display: block; color: var(--ink-muted); font-weight: 400; }
+
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border); }
+th { color: var(--ink-subtle); font-weight: 500; font-size: 1.1rem; }
+
+/* Hand cursor: ring fills while dwelling on a button. */
+.cursor {
+  position: fixed; left: 0; top: 0; width: 4rem; height: 4rem; margin: -2rem 0 0 -2rem; border-radius: 50%;
+  pointer-events: none; z-index: 10;
+  background: conic-gradient(var(--accent-ink) calc(var(--p, 0) * 360deg), transparent 0);
+  -webkit-mask: radial-gradient(circle, transparent 55%, #000 57%); mask: radial-gradient(circle, transparent 55%, #000 57%);
+  border: 2px solid var(--accent-ink);
+}
+
+/* Game stage: fixed 16:9, letterboxed on any display. */
+.stage { position: fixed; inset: 0; margin: auto; width: min(100vw, 100vh * 16 / 9); height: min(100vh, 100vw * 9 / 16); }
+.hud { position: absolute; top: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #000; }
+.hud.clock { left: 50%; transform: translateX(-50%); font-size: 3.2rem; }
+.hud.score { font-size: 2.8rem; }
+.hud.p1, .hud.solo { left: 3rem; color: #818cf8; }
+.hud.p2 { right: 3rem; color: #34d399; }
