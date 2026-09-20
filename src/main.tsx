@@ -1,25 +1,19 @@
 // Shell: start → home → briefing (stage, goals) → play → results (stars, XP, badges) → stats / badges.
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 import { grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { report } from './report.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
-import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, say, sfx, type GameProps } from './stage.tsx';
-import Slice from './Slice.tsx';
-import Run from './Run.tsx';
-import Jab from './Jab.tsx';
-import Beat from './Beat.tsx';
-import ShapeUp from './ShapeUp.tsx';
-import Goalie from './Goalie.tsx';
-import Smash from './Smash.tsx';
-import Rocket from './Rocket.tsx';
-import Freeze from './Freeze.tsx';
-import Wipe from './Wipe.tsx';
+import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, play, say, sfx, type Playable } from './stage.tsx';
+// Each game is its own chunk: its code (and, for two of them, the physics engine) is fetched the first time it is played.
+const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('./games/run.ts')), Jab = play(() => import('./games/jab.ts')), Beat = play(() => import('./games/beat.ts'));
+const ShapeUp = play(() => import('./games/shapeup.ts')), Goalie = play(() => import('./games/goalie.ts')), Smash = play(() => import('./games/smash.ts'));
+const Rocket = play(() => import('./games/rocket.ts')), Freeze = play(() => import('./games/freeze.ts')), Wipe = play(() => import('./games/wipe.ts'));
 
-type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: FC<GameProps> };
+type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: Playable };
 // The library. A new game = one component + one row here (+ its star goals in meta.ts). maxPlayers 2 only for
 // compact-footprint games (PLAN §3); a wide game is still playable by two through "Take turns".
 const GAMES: Game[] = [
@@ -260,6 +254,7 @@ function App() {
   const update = (next: typeof db) => { save(next); setDb(next); };
   const go = (s: Screen) => {
     if (s.at === 'play') energy0.current = players.map((p) => p.energy);
+    if (s.at === 'brief') s.game.Play.warm(); // fetch the renderer and this game's code while the player reads how to play
     setScreen(s);
   };
   const chooseMode = (m: Mode) => { setMode(m); setPlayers(m === 'together' ? 2 : 1); };

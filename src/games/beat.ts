@@ -1,25 +1,22 @@
 // Beat — moves fall to the line in time with the music: left up, right up, both up, squat, jump.
 // Each move has its own lane and shape; landing it close to the beat is "Perfect" and scores double.
 // All vertical, so it is compact. The clock is the AudioContext's, so notes and sound cannot drift apart.
-import { useLayoutEffect, useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
-import { isAir, isLow, players, tuning, type Player } from './pose.ts';
-import { hardness } from './meta.ts';
-import { COUNTDOWN, H, Stage, audio, inputLag, comboText, countdown, hitSound, music, say, scoreHud, useBursts, zoneHalf, zoneX, type GameProps, type Hud } from './stage.tsx';
+import { isAir, isLow, players, tuning, type Player } from '../pose.ts';
+import { hardness } from '../meta.ts';
+import { fade, flat, node, shapes, show } from '../engine.ts';
+import { COUNTDOWN, H, audio, bursts as makeBursts, comboText, countdown, divider, hitSound, inputLag, music, say, scoreHud, zoneHalf, zoneX, type Game } from '../kit.ts';
 
 const BPM = 104, BEAT = 60 / BPM, ROUND = 60, FALL = 2.4; // FALL = seconds a note is on screen before its beat
 const HIT_Y = -2.8, WINDOW = 0.26, PERFECT = 0.11; // seconds either side of the beat
 const HOLD = 1.5; // a move must have been started this recently to count: getting into it early is fine, standing there with a hand up all round is not
 const up = (pl: Player, h: number) => pl.hands[h].seen && pl.hands[h].y > tuning.handUp;
-const disc = new THREE.CircleGeometry(0.55, 24), wide = new THREE.PlaneGeometry(3.4, 0.55), tri = new THREE.CircleGeometry(0.7, 3);
 const MOVES = [
-  { hint: 'Left up', color: '#818cf8', lane: -0.7, geo: disc, ok: (pl: Player) => up(pl, 0) && !up(pl, 1) },
-  { hint: 'Right up', color: '#34d399', lane: 0.7, geo: disc, ok: (pl: Player) => up(pl, 1) && !up(pl, 0) },
-  { hint: 'Both up', color: '#fbbf24', lane: 0, geo: wide, ok: (pl: Player) => up(pl, 0) && up(pl, 1) },
-  { hint: 'Squat', color: '#f43f5e', lane: 0, geo: tri, ok: isLow },
-  { hint: 'Jump', color: '#22d3ee', lane: 0, geo: tri, ok: isAir },
-];
+  { hint: 'Left up', color: '#818cf8', lane: -0.7, shape: 'disc', ok: (pl: Player) => up(pl, 0) && !up(pl, 1) },
+  { hint: 'Right up', color: '#34d399', lane: 0.7, shape: 'disc', ok: (pl: Player) => up(pl, 1) && !up(pl, 0) },
+  { hint: 'Both up', color: '#fbbf24', lane: 0, shape: 'wide', ok: (pl: Player) => up(pl, 0) && up(pl, 1) },
+  { hint: 'Squat', color: '#f43f5e', lane: 0, shape: 'tri', ok: isLow },
+  { hint: 'Jump', color: '#22d3ee', lane: 0, shape: 'tri', ok: isAir },
+] as const;
 
 // One move every two beats, then every beat for the second half; never the same move twice running.
 const chart = (hard: number) => {
@@ -32,16 +29,24 @@ const chart = (hard: number) => {
   return notes;
 };
 
-function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
-  const notes = useMemo(() => chart(hardness(stage)), [stage]);
-  const meshes = useRef<(THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null)[]>([]);
-  const lines = useRef<(THREE.Mesh | null)[]>([]);
-  const bursts = useBursts();
-  const g = useRef({ start: audio().currentTime + COUNTDOWN, scores: [0, 0], combo: [0, 0], said: ['', ''], saidUntil: [0, 0], done: false, last: 0, since: [MOVES.map(() => -9), MOVES.map(() => -9)] }).current;
-  useLayoutEffect(() => { music.start('beat', g.start, 0.6); return () => music.stop(); }, [g]); // the band starts on the game's beat zero
+export default function beat({ n, stage, onEnd, hud, scene }: Game) {
+  const notes = chart(hardness(stage));
+  const mesh = { disc: shapes.circle(0.55, 24), wide: shapes.quad(3.4, 0.55), tri: shapes.circle(0.7, 3) }, looks = MOVES.map((m) => flat(m.color, { opacity: 1 }));
+  // One marker per note per player, made up front and hidden until its note is on screen.
+  const marks = notes.map((note) => Array.from({ length: n }, () => {
+    const e = node(scene.root, mesh[MOVES[note.move].shape], looks[note.move]);
+    e.setLocalEulerAngles(0, 0, note.move === 3 ? -90 : 90); // squat points down, jump points up
+    e.enabled = false;
+    return e;
+  }));
+  const lineLook = flat('#fafafa'), lines = Array.from({ length: n }, (_, p) => node(scene.root, shapes.quad(zoneHalf(n) * 1.6, 0.1), lineLook, [zoneX(n, p), HIT_Y, -0.1]));
+  divider(scene, n);
+  const bursts = makeBursts(scene.root);
+  const g = { start: audio().currentTime + COUNTDOWN, scores: [0, 0], combo: [0, 0], said: ['', ''], saidUntil: [0, 0], done: false, last: 0, since: [MOVES.map(() => -9), MOVES.map(() => -9)] };
+  music.start('beat', g.start, 0.6); // the band starts on the game's beat zero
   const laneX = (p: number, lane: number) => zoneX(n, p) + lane * zoneHalf(n) * 0.55;
 
-  useFrame(() => {
+  return () => {
     if (g.done) return;
     const t = audio().currentTime - g.start, dt = Math.min(0.05, t - g.last);
     g.last = t;
@@ -50,7 +55,7 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     music.intensity(0.5 + Math.max(g.combo[0], g.combo[1]) / 20);
 
     const pulse = 1 + 0.6 * Math.max(0, 1 - ((((t % BEAT) + BEAT) % BEAT) / BEAT) * 3); // the line kicks on every beat
-    lines.current.forEach((l) => l?.scale.set(1, pulse, 1));
+    for (const l of lines) l.setLocalScale(1, pulse, 1);
 
     // What the game sees now, the player did `lag` ago: the measured tracking delay, plus how late they hear the band.
     const lag = inputLag() + (audio().outputLatency || 0);
@@ -76,13 +81,11 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
           else if (ok) note.state[p] = 1;
           else if (note.state[p] === 1) score(note, p, due);
         }
-        const m = meshes.current[i * n + p], hit = note.state[p] === 2;
-        if (!m) continue;
-        m.visible = note.at - t < FALL && due > -WINDOW - 0.15;
-        m.position.set(laneX(p, move.lane), HIT_Y + ((note.at - t) / FALL) * (H / 2 - HIT_Y), 0);
-        m.rotation.z = note.move === 3 ? -Math.PI / 2 : Math.PI / 2; // squat points down, jump points up
-        m.scale.setScalar(hit ? 1.4 : 1);
-        m.material.opacity = hit ? 0.3 : 1;
+        const m = marks[i][p], hit = note.state[p] === 2;
+        if (!show(m, note.at - t < FALL && due > -WINDOW - 0.15)) continue;
+        m.setLocalPosition(laneX(p, move.lane), HIT_Y + ((note.at - t) / FALL) * (H / 2 - HIT_Y), 0);
+        m.setLocalScale(hit ? 1.4 : 1, hit ? 1.4 : 1, 1);
+        fade(m, hit ? 0.3 : 1);
       }
       if (note.judged || due > -WINDOW) return;
       note.judged = true;
@@ -97,26 +100,5 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
       hud.p('h', p, t < 0 ? 'Move on the beat' : g.saidUntil[p] > t ? g.said[p] : next ? MOVES[next.move].hint : comboText(g.combo[p]));
     bursts.update(dt);
     scoreHud(hud, n, g.scores);
-  });
-
-  return (
-    <>
-      {notes.flatMap((note, i) =>
-        Array.from({ length: n }, (_, p) => (
-          <mesh key={`${i}.${p}`} ref={(m) => void (meshes.current[i * n + p] = m as never)} geometry={MOVES[note.move].geo} visible={false}>
-            <meshBasicMaterial color={MOVES[note.move].color} transparent />
-          </mesh>
-        )),
-      )}
-      {Array.from({ length: n }, (_, p) => (
-        <mesh key={p} ref={(m) => void (lines.current[p] = m)} position={[zoneX(n, p), HIT_Y, -0.1]}>
-          <planeGeometry args={[zoneHalf(n) * 1.6, 0.1]} /><meshBasicMaterial color="#fafafa" />
-        </mesh>
-      ))}
-      {bursts.node}
-      {n === 2 && <mesh><planeGeometry args={[0.04, H]} /><meshBasicMaterial color="#3f3f46" /></mesh>}
-    </>
-  );
+  };
 }
-
-export default (props: GameProps) => <Stage n={props.n}>{(hud) => <Scene {...props} hud={hud} />}</Stage>;

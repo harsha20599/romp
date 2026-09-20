@@ -1,32 +1,26 @@
 // Wipe — the screen is filthy; scrub it clean with both hands. Grime creeps back, faster every layer.
 // Clear your whole side for a bonus and a fresh, tougher layer. Reach is body-relative, so it is compact.
-import { useLayoutEffect, useMemo, useRef } from 'react';
-import { hardness } from './meta.ts';
-import { useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
-import { H, Stage, music, sfx, scoreHud, useBursts, useHands, useRound, type GameProps, type Hud } from './stage.tsx';
+import { hardness } from '../meta.ts';
+import { instanced, shapes } from '../engine.ts';
+import { bursts as makeBursts, divider, hands as makeHands, music, round, scoreHud, sfx, type Game } from '../kit.ts';
 
 const ROUND = 60, COLS = 16, ROWS = 8, SCRUB = 1.15; // SCRUB = radius a hand cleans, in tiles
 const LAYERS = ['#78716c', '#57534e', '#7c2d12', '#365314', '#1e3a8a'];
-const tileGeo = new THREE.PlaneGeometry(0.96, 0.96), tmp = new THREE.Object3D(), tint = new THREE.Color();
 
-function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
+export default function wipe({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage); // grime comes back sooner on higher stages
-  useLayoutEffect(() => { music.start('calm', undefined, 0.6); return () => music.stop(); }, []);
-  const tiles = useMemo(() => Array.from({ length: COLS * ROWS }, (_, i) => {
+  music.start('calm', undefined, 0.6);
+  const tiles = Array.from({ length: COLS * ROWS }, (_, i) => {
     const x = (i % COLS) - COLS / 2 + 0.5, y = Math.floor(i / COLS) - ROWS / 2 + 0.5 - 0.4;
     return { x, y, zone: n === 2 && x > 0 ? 1 : 0, dirt: 1, cleanFor: 0 };
-  }), [n]);
-  const mesh = useMemo(() => {
-    const m = new THREE.InstancedMesh(tileGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.92 }), COLS * ROWS);
-    m.frustumCulled = false;
-    return m;
-  }, []);
-  const g = useRef({ scores: [0, 0], layer: [0, 0], said: [0, 0], painted: [-1, -1] }).current;
-  const hands = useHands(n, undefined, 0), bursts = useBursts();
-  const tick = useRound(hud, ROUND, () => onEnd(g.scores.slice(0, n)));
+  });
+  const grime = instanced(scene.root, shapes.quad(0.96, 0.96), COLS * ROWS, 0.92);
+  const g = { scores: [0, 0], layer: [0, 0], said: [0, 0], painted: [-1, -1] };
+  const hands = makeHands(scene, n, undefined, 0), bursts = makeBursts(scene.root);
+  divider(scene, n, '#fafafa', 0.5, 0.06);
+  const tick = round(hud, ROUND, () => onEnd(g.scores.slice(0, n)));
 
-  useFrame((_, rawDt) => {
+  return (rawDt: number) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null) return;
     const at = hands.update(dt), left = [0, 0], total = [0, 0];
@@ -40,14 +34,10 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
       } else if (tile.dirt < 1 && (tile.cleanFor += dt) > (4 - Math.min(3, g.layer[z] * 0.6)) / hard) tile.dirt = Math.min(1, tile.dirt + dt * 0.8); // grime creeps back
       total[z]++;
       if (tile.dirt > 0.5) left[z]++;
-      tmp.position.set(tile.x, tile.y, 0);
-      tmp.scale.setScalar(tile.dirt);
-      tmp.updateMatrix();
-      mesh.setMatrixAt(i, tmp.matrix);
-      if (g.painted[z] !== g.layer[z]) mesh.setColorAt(i, tint.set(LAYERS[g.layer[z] % LAYERS.length]));
+      grime.place(i, tile.x, tile.y, 0, tile.dirt);
+      if (g.painted[z] !== g.layer[z]) grime.paint(i, LAYERS[g.layer[z] % LAYERS.length]);
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    grime.commit();
     g.painted = [...g.layer];
 
     for (let p = 0; p < n; p++) {
@@ -60,16 +50,5 @@ function Scene({ n, stage, onEnd, hud }: GameProps & { hud: Hud }) {
     }
     bursts.update(dt);
     scoreHud(hud, n, g.scores);
-  });
-
-  return (
-    <>
-      <primitive object={mesh} />
-      {hands.nodes}
-      {bursts.node}
-      {n === 2 && <mesh position-z={0.5}><planeGeometry args={[0.06, H]} /><meshBasicMaterial color="#fafafa" /></mesh>}
-    </>
-  );
+  };
 }
-
-export default (props: GameProps) => <Stage n={props.n}>{(hud) => <Scene {...props} hud={hud} />}</Stage>;

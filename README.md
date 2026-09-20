@@ -26,6 +26,23 @@ Home → Tracking → Delay → **Measure** once per screen/cable change; predic
 (photograph tablet and TV together) and `/bench.html` (camera, model and latency on the device) are there for the next hunt;
 `tools/tablet-diag.sh` reads the tablet over adb.
 
+## How it is built
+
+React draws the menus and the HUD (plain DOM). Everything on the stage is the **PlayCanvas engine** used as a code
+library — no editor, only the parts imported in `src/engine.ts` (the rest is tree-shaken). One app and one WebGL2 canvas
+live for the whole session; a round builds its scene under a root entity and destroys it at the end, so compiled shaders
+survive from round to round and the context is never re-created.
+
+- `src/engine.ts` — the app, materials (`flat`, `lit`), shapes, GLB loading (`fitted`), instanced dots, ribbons, the
+  clip-plane material Slice cuts fruit with, pre-round warm-up, frame pacing, and the automatic "lean" step-down.
+- `src/kit.ts` — what games share: round clock, hands, bursts, hit-testing, sound. `src/stage.tsx` — the React shell.
+- `src/games/*.ts` — one module per game: `export default (game) => tick`, optional `export const view` for a
+  perspective camera. **A new game = one module + one row in `GAMES` (main.tsx) + its star goals (meta.ts).**
+- `src/physics.ts` — Rapier, fetched only by the games that use it (Goalie, Smash).
+
+The menus load ~80 KB of script (gzipped); the engine (~325 KB) and a game's code are fetched on its briefing screen.
+`serve.mjs` sends text-like files brotli-compressed and revalidates the rest by ETag, so a repeat visit re-downloads nothing.
+
 ## Test builds and field numbers
 
 A test build runs beside the live one without touching it: a git worktree on its own branch, built into its own
