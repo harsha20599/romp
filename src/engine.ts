@@ -174,7 +174,19 @@ export const boundsOf = (e: Entity) => {
   instancesOf(e).forEach((mi, i) => (i ? box.add(mi.aabb) : box.copy(mi.aabb)));
   return box;
 };
-const quiet = (e: Entity) => { for (const r of e.findComponents('render') as unknown as { castShadows: boolean; receiveShadows: boolean }[]) r.castShadows = r.receiveShadows = false; return e; };
+// Every model here is a painted toy, never metal. Some kits leave glTF's metallic factor at its default of 1, which
+// with no sky to reflect renders nearly black — so models are made matte as they come in (once per material).
+// …and the nature kit's pastel teal foliage is repainted into the greens of the kit the game already used, so the
+// two families of props read as one world.
+const REPAINT: Record<string, [number, number, number]> = { leafsGreen: [0.18, 0.62, 0.36], leafsDark: [0.10, 0.46, 0.31], grass: [0.30, 0.68, 0.28], dirt: [0.50, 0.50, 0.56] };
+const matte = new WeakSet<object>();
+const quiet = (e: Entity) => {
+  for (const r of e.findComponents('render') as unknown as { castShadows: boolean; receiveShadows: boolean; meshInstances: MeshInstance[] }[]) {
+    r.castShadows = r.receiveShadows = false;
+    for (const mi of r.meshInstances) { const m = mi.material as StandardMaterial, paint = REPAINT[m.name]; if (!matte.has(m) && paint) { m.diffuse = new Color(paint[0], paint[1], paint[2]); m.update(); } if (!matte.has(m) && m.useMetalness && m.metalness > 0.3 && !m.metalnessMap) { m.metalness = 0; m.gloss = Math.min(m.gloss, 0.3); m.update(); } matte.add(m); }
+  }
+  return e;
+};
 // A loaded model, scaled so its largest side is `size` and re-centred on its own origin (y on the floor if `floor`).
 // What comes back is a template that is never drawn: `.clone()` it for every copy you want on stage.
 export async function fitted(url: string, size: number, floor = false) {
@@ -562,6 +574,91 @@ export function backdrop(scene: Scene, place: Place, bodies = false) {
   return Object.assign(e, { drive: (v: number) => m.setParameter('uDrive', v), mood: (v: number) => m.setParameter('uMood', v) }); // what the game feeds its world: distance run, heat built, the beat…
 }
 
+// ---- a 3D world's big surfaces: the sky behind it, the ground under it, the shade beneath things ------------------------
+// The sky is one quad fixed to the camera at the back of the view; `horizon` is where the ground meets it, as a
+// fraction of the screen height. Day: sun, drifting clouds, two ranges of hills. Night: stars, a moon, a lit skyline.
+// uDrive slides the far scenery sideways a touch as the world moves, so the distance is alive too.
+export function sky(scene: Scene, night: boolean, horizon: number, view: View) {
+  const m = own(new ShaderMaterial({
+    uniqueName: `romp-sky-${night ? 'night' : 'day'}`,
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vUv;
+      void main(void) { vUv = vertex_position.xy + 0.5; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec2 vUv; uniform float uTime; uniform float uDrive;
+      float hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 q) { vec2 i = floor(q), f = fract(q); f = f * f * (3.0 - 2.0 * f); return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+      float fbm(vec2 q) { return noise(q) * 0.5 + noise(q * 2.0 + 3.1) * 0.3 + noise(q * 4.0 + 1.7) * 0.2; }
+      void main(void) {
+        float h = ${horizon.toFixed(3)}, up = max(0.0, (vUv.y - h) / (1.0 - h)), x = vUv.x * 1.78, t = uTime; vec3 c;
+        ${night ? `c = mix(vec3(0.16, 0.10, 0.36), vec3(0.02, 0.02, 0.09), pow(up, 0.6));
+        vec2 sg = vUv * vec2(220.0, 124.0); c += step(0.992, hash(floor(sg))) * smoothstep(0.5, 0.1, length(fract(sg) - 0.5)) * (0.6 + 0.4 * sin(t * 2.0 + hash(floor(sg)) * 50.0)) * smoothstep(0.05, 0.4, up);
+        vec2 mo = vec2(x - 1.35, vUv.y - 0.86); c += vec3(1.0, 0.97, 0.85) * (smoothstep(0.052, 0.046, length(mo)) + 0.10 / (1.0 + 300.0 * dot(mo, mo)));
+        for (int i = 0; i < 2; i++) { float k = float(i), sx = x * (7.0 + k * 5.0) + uDrive * (0.004 + k * 0.004) + k * 3.3, id = floor(sx), top = h + (0.05 + 0.13 * hash(vec2(id, k))) * (1.0 - k * 0.35);
+          float body = step(vUv.y, top) * step(0.08, fract(sx)) * step(h - 0.02, vUv.y); vec2 wq = vec2(fract(sx) * 5.0, (vUv.y - h) * 90.0);
+          float lit = step(0.55, hash(floor(wq) + id * 7.0)) * step(0.25, fract(wq.x)) * step(0.3, fract(wq.y));
+          c = mix(c, mix(vec3(0.05, 0.04, 0.14), vec3(0.09, 0.07, 0.22), k) + vec3(1.0, 0.8, 0.4) * lit * 0.55, body); }
+        c += vec3(0.85, 0.25, 0.6) * 0.22 * exp(-up * 9.0);` : `c = mix(vec3(0.80, 0.91, 0.98), vec3(0.20, 0.50, 0.90), pow(up, 0.7));
+        vec2 sn = vec2(x - 0.42, vUv.y - 0.84); c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.06, 0.052, length(sn)) + 0.18 / (1.0 + 60.0 * dot(sn, sn)));
+        float cl = smoothstep(0.50, 0.78, fbm(vec2(x * 2.2 + t * 0.012 + uDrive * 0.0006, vUv.y * 7.0))) * smoothstep(0.08, 0.35, up) * (1.0 - smoothstep(0.75, 1.0, up)); c = mix(c, vec3(1.0), cl * 0.9);
+        float far = h + 0.030 + 0.028 * sin(x * 4.0 + uDrive * 0.002 + 1.0) + 0.014 * sin(x * 11.0 + uDrive * 0.004), nearH = h + 0.008 + 0.022 * sin(x * 2.6 + uDrive * 0.004 + 4.0) + 0.008 * sin(x * 17.0);
+        c = mix(c, vec3(0.55, 0.70, 0.80), smoothstep(far + 0.002, far - 0.002, vUv.y)); c = mix(c, vec3(0.36, 0.58, 0.50), smoothstep(nearH + 0.002, nearH - 0.002, vUv.y));`}
+        gl_FragColor = vec4(gammaCorrectOutput(c), 1.0);
+      }`,
+  }));
+  m.depthWrite = false; m.setParameter('uTime', 0); m.setParameter('uDrive', 0); m.update();
+  timed.push(m);
+  const far = view.far * 0.96, tall = 2 * far * Math.tan((view.fov * Math.PI) / 360), e = node(scene.camera, shapes.quad(1, 1), m, [0, 0, -far]);
+  e.setLocalScale(tall * (W / H) * 1.1, tall * 1.1, 1);
+  return { drive: (v: number) => m.setParameter('uDrive', v) };
+}
+
+// The ground of a 3D game in one shader: `tracks` are the x of each road's centre. Grass is mown in bands (or, in the
+// city, paved in slabs), the road is asphalt with two dashed lane lines, solid edges and a kerb; everything scrolls with
+// uDrive (distance travelled), lines stay crisp into the distance, and it fades into the fog colour like the rest.
+export function ground(scene: Scene, o: { tracks: number[]; lane: number; city: boolean; fog: string; fogFrom: number; fogTo: number; size: [number, number]; z: number }) {
+  const m = own(new ShaderMaterial({
+    uniqueName: `romp-ground-${o.city ? 'city' : 'park'}`,
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_view; uniform mat4 matrix_viewProjection; varying vec3 vW; varying float vDepth;
+      void main(void) { vec4 w = matrix_model * vec4(vertex_position, 1.0); vW = w.xyz; vDepth = -(matrix_view * w).z; gl_Position = matrix_viewProjection * w; }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec3 vW; varying float vDepth; uniform float uDrive; uniform vec3 uFog; uniform vec2 uFogRange; uniform vec2 uTracks; uniform float uLane;
+      float hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 q) { vec2 i = floor(q), f = fract(q); f = f * f * (3.0 - 2.0 * f); return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+      void main(void) {
+        float z = vW.z - uDrive, soft = 0.012 + vDepth * 0.0035, dx = min(abs(vW.x - uTracks.x), abs(vW.x - uTracks.y)), half_ = uLane * 1.65;
+        ${o.city ? `vec2 slab = vec2(vW.x, z) / 2.2; float joint = smoothstep(0.0, soft * 1.5, min(fract(slab.x), fract(slab.y))); vec3 c = mix(vec3(0.10, 0.10, 0.13), vec3(0.20, 0.20, 0.25) + 0.03 * hash(floor(slab)), joint);`
+                 : `float band = step(0.5, fract(z / 9.0)); vec3 c = mix(vec3(0.20, 0.42, 0.10), vec3(0.26, 0.50, 0.13), band) * (0.86 + 0.28 * noise(vec2(vW.x, z) * 1.7)); c = mix(c, vec3(0.30, 0.56, 0.16), smoothstep(0.62, 0.9, noise(vec2(vW.x, z) * 0.35)) * 0.5);`}
+        float onRoad = smoothstep(half_ + soft, half_ - soft, dx), kerb = smoothstep(half_ + 0.34 + soft, half_ + 0.34 - soft, dx) * (1.0 - onRoad);
+        vec3 kerbC = mix(vec3(0.85, 0.16, 0.16), vec3(0.95), step(0.5, fract(z / 2.4))); c = mix(c, ${o.city ? 'kerbC' : 'vec3(0.62, 0.55, 0.42)'}, kerb);
+        vec3 road = ${o.city ? 'vec3(0.13, 0.13, 0.16)' : 'vec3(0.50, 0.47, 0.44)'} * (0.88 + 0.2 * noise(vec2(vW.x * 6.0, z * 1.5))) ;
+        float edge = smoothstep(0.07 + soft, 0.07 - soft, abs(dx - (half_ - 0.22))), dash = smoothstep(0.06 + soft, 0.06 - soft, abs(dx - uLane * 0.5)) * step(0.45, fract(z / 5.2));
+        road = mix(road, vec3(0.96), max(edge, dash) * 0.92);
+        c = mix(c, road, onRoad);
+        c = mix(c, uFog, clamp((vDepth - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0));
+        gl_FragColor = vec4(gammaCorrectOutput(c), 1.0);
+      }`,
+  }));
+  m.setParameter('uDrive', 0); m.setParameter('uFog', linear(o.fog)); m.setParameter('uFogRange', [o.fogFrom, o.fogTo]); m.setParameter('uTracks', [o.tracks[0], o.tracks[o.tracks.length - 1]]); m.setParameter('uLane', o.lane);
+  m.update();
+  node(scene.root, shapes.floor(o.size[0], o.size[1]), m, [0, 0, o.z]);
+  return { drive: (v: number) => m.setParameter('uDrive', v) };
+}
+
+// Shade on the ground under a thing: a soft dark ellipse. Cheap, and the difference between floating and standing.
+export function shade() {
+  const m = new ShaderMaterial({
+    uniqueName: 'romp-shade',
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vAt;
+      void main(void) { vAt = vertex_position.xz; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `varying vec2 vAt; uniform float uShade; void main(void) { gl_FragColor = vec4(0.0, 0.0, 0.0, smoothstep(0.5, 0.1, length(vAt)) * uShade); }`,
+  });
+  m.blendType = BLEND_NORMAL; m.depthWrite = false; m.setParameter('uShade', 0.42); m.update();
+  return { look: own(m), mesh: shapes.floor(1, 1) };
+}
+
 // A strip of triangles rewritten every frame (the hand ribbons). Each vertex knows how far along the strip it is (u)
 // and which edge it is on (v), for materials that fade along and across it.
 export function ribbon(parent: GraphNode, points: number, material: Material) {
@@ -655,6 +752,7 @@ export function run(tick: Tick) {
     frame.rendering.toneMapping = TONEMAP_LINEAR;
     frame.rendering.samples = 1;
     frame.bloom.intensity = 0.03; frame.bloom.blurLevel = 5;
+    if ((at.root.findComponent('camera') as unknown as { projection: number }).projection === PROJECTION_PERSPECTIVE) { frame.vignette.intensity = 0.42; frame.vignette.inner = 0.55; frame.vignette.outer = 1.35; } // 3D views: the eye is held in the middle
     frame.update();
   }
   canvas.style.visibility = 'hidden';

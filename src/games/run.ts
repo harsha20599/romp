@@ -4,7 +4,7 @@
 import type { AnimTrack, Asset, ContainerResource, Entity, MeshInstance, StandardMaterial } from 'playcanvas';
 import { isAir, isLow, players } from '../pose.ts';
 import { hardness } from '../meta.ts';
-import { boundsOf, color, fitted, flat, instantiate, lit, node, own, shapes, show, type View } from '../engine.ts';
+import { boundsOf, color, fitted, flat, glowLook, ground, instanced, instantiate, lit, node, own, shade, shapes, show, sky, type View } from '../engine.ts';
 import { PLAYER_COLORS, bursts as makeBursts, hitSound, hitStop, music, round, say, scoreHud, sfx, type Game } from '../kit.ts';
 
 const ROUND = 75, FAR = -70, LANE = 1.7, WINDOW = 1.1, POWER_TIME = 8, DEG = 180 / Math.PI;
@@ -22,47 +22,56 @@ export const view: View = { position: [0, 4.4, 8.5], fov: 55, near: 0.1, far: 14
 export default async function runGame({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage), theme = stage >= 3 ? CITY : FOREST;
   const trackX = (p: number) => (n === 1 ? 0 : (p - 0.5) * 8.4);
-  scene.sky(theme.sky);
-  scene.fog(theme.sky, 30, 72);
-  scene.ambient('#ffffff', 0.8);
+  // The world: a real sky behind (sun, clouds and hills — or stars, a moon and a lit skyline for the city stages), a
+  // ground drawn in one shader (mown grass or paving, asphalt, lane lines, kerbs), and haze the colour of the horizon.
+  const night = theme === CITY, haze = night ? '#2b1a5c' : '#cfe8f5', tracks = Array.from({ length: n }, (_, p) => trackX(p));
+  scene.sky(haze); scene.fog(haze, 34, 80); scene.ambient(night ? '#aab4ff' : '#fff6e5', night ? 0.6 : 0.85);
+  const heaven = sky(scene, night, 0.63, view), earth = ground(scene, { tracks, lane: LANE, city: night, fog: haze, fogFrom: 34, fogTo: 80, size: [220, -FAR + 60], z: FAR / 2 - 5 });
 
   // Models: every instance is a clone of one fitted original.
-  const [barrel, crate, coin, star, heart, props, robots] = await Promise.all([
+  const N = '/assets/nature/', small = night ? [C + 'detail-parasol-a.glb', C + 'detail-parasol-b.glb', A + 'flag.glb', A + 'crate.glb', A + 'barrel.glb', A + 'fence-straight.glb'] : [N + 'plant_bush.glb', N + 'flower_redA.glb', N + 'grass_large.glb', N + 'plant_bushLarge.glb', N + 'flower_yellowA.glb', N + 'stump_round.glb', N + 'rock_largeA.glb', N + 'flower_purpleA.glb', N + 'log_stack.glb', N + 'mushroom_redGroup.glb', N + 'fence_simple.glb', N + 'sign.glb'];
+  const smallSize = night ? [2.2, 2.2, 2.4, 1.2, 1.2, 1.8] : [1.5, 0.8, 0.9, 2.2, 0.8, 1.0, 1.6, 0.8, 1.8, 0.9, 1.6, 1.4];
+  const distant = night ? [C + 'low-detail-building-a.glb', C + 'low-detail-building-c.glb', C + 'low-detail-building-e.glb', C + 'low-detail-building-wide-a.glb'] : [N + 'tree_oak.glb', N + 'tree_fat.glb', N + 'tree_detailed.glb', N + 'tree_pineTallA.glb'];
+  const [barrel, crate, coin, star, heart, props, robots, nearProps, farProps] = await Promise.all([
     fitted(A + 'barrel.glb', 1.35, true), fitted(A + 'crate-strong.glb', 1.6, true), fitted(A + 'coin-gold.glb', 0.8), fitted(A + 'star.glb', 1.2), fitted(A + 'heart.glb', 1.2),
     Promise.all(theme.props.map((url, i) => fitted(url, theme.size[i], true))), Promise.all(Array.from({ length: n }, () => instantiate('/assets/robot.glb'))),
+    Promise.all(small.map((url, i) => fitted(url, smallSize[i], true))), Promise.all(distant.map((url, i) => fitted(url, night ? 15 + i * 3 : 9 + i * 1.5, true))),
   ]);
 
   const root = node(scene.root);
+  const dark = shade(), gold = glowLook('#fde047', 0.75), glowQuad = shapes.quad(2, 2);
   const glow = (hex: string) => lit(hex, { emissive: hex, glow: 1.5 });
   // Built once and shared by every beam and magnet that ever spawns — nothing is allocated on the GPU mid-run.
   const barMesh = shapes.box(LANE * 3.4, 0.5, 0.5), postMesh = shapes.box(0.3, 2.7, 0.3), ringMesh = shapes.arch(0.5, 0.16);
   const barLook = glow('#22d3ee'), postLook = lit('#52525b'), ringLook = glow('#ef4444');
   const put = (group: Entity, template: Entity, x: number, y: number, z: number) => { const e = template.clone() as Entity; e.setLocalPosition(x, y, z); group.addChild(e); return e; };
   const build: Record<Kind, (group: Entity, lanes: number[]) => Entity[]> = {
-    barrels: (g) => [-1, 0, 1].map((l) => put(g, barrel, l * LANE, 0, 0)),
+    barrels: (g) => { node(g, dark.mesh, dark.look, [0, 0.03, 0]).setLocalScale(LANE * 3.4, 1, 1.9); return [-1, 0, 1].map((l) => put(g, barrel, l * LANE, 0, 0)); },
     beam: (g) => [node(g, barMesh, barLook, [0, 2.45, 0]), ...[-1, 1].map((s) => node(g, postMesh, postLook, [s * LANE * 1.7, 1.35, 0]))],
-    crates: (g, lanes) => lanes.flatMap((l) => [0, 1.6].map((y) => put(g, crate, l * LANE, y, 0))),
-    coins: (g, lanes) => Array.from({ length: 5 }, (_, k) => put(g, coin, lanes[0] * LANE, 1.1, -k * 1.7)),
+    crates: (g, lanes) => lanes.flatMap((l) => { node(g, dark.mesh, dark.look, [l * LANE, 0.03, 0]).setLocalScale(2.3, 1, 2.3); return [0, 1.6].map((y) => put(g, crate, l * LANE, y, 0)); }),
+    coins: (g, lanes) => Array.from({ length: 5 }, (_, k) => { const c = put(g, coin, lanes[0] * LANE, 1.1, -k * 1.7); node(c, glowQuad, gold, [0, 0, -0.1]).setLocalScale(0.9, 0.9, 1); return c; }),
     magnet: (g, lanes) => [node(g, ringMesh, ringLook, [lanes[0] * LANE, 1.3, 0])],
-    shield: (g, lanes) => [put(g, heart, lanes[0] * LANE, 1.3, 0)],
-    double: (g, lanes) => [put(g, star, lanes[0] * LANE, 1.3, 0)],
+    shield: (g, lanes) => { node(g, glowQuad, gold, [lanes[0] * LANE, 1.3, -0.2]).setLocalScale(1.7, 1.7, 1); return [put(g, heart, lanes[0] * LANE, 1.3, 0)]; },
+    double: (g, lanes) => { node(g, glowQuad, gold, [lanes[0] * LANE, 1.3, -0.2]).setLocalScale(1.7, 1.7, 1); return [put(g, star, lanes[0] * LANE, 1.3, 0)]; },
   };
   // One of each, hidden: the stage warms up whatever is in the scene before "Go", so the first barrel costs nothing.
   (Object.keys(build) as Kind[]).forEach((kind) => { const g = node(root); build[kind](g, [0]); g.enabled = false; });
   // Scenery: a conveyor of props down both sides, recycled to the far end as they pass the camera.
-  const scenery = Array.from({ length: 28 }, (_, i) => {
-    const side = i % 2 ? 1 : -1, x = side * ((n === 1 ? 0 : 4.2) + LANE * 1.5 + 2.2 + theme.size[i % 6] * 0.45 + Math.random() * 3);
-    const e = put(root, props[i % 6], x, 0, FAR + (i / 28) * (-FAR + 12));
+  const edge = (n === 1 ? 0 : 4.2) + LANE * 1.65 + 0.6, span = -FAR + 12;
+  const row = (count: number, pick: (i: number) => Entity, x: (i: number, side: number) => number) => Array.from({ length: count }, (_, i) => {
+    const side = i % 2 ? 1 : -1, px = side * x(i, side), z = FAR + ((i + Math.random() * 0.6) / count) * span, e = put(root, pick(i), px, 0, z);
     e.setLocalEulerAngles(0, Math.random() * 360, 0);
-    return { e, x, z: FAR + (i / 28) * (-FAR + 12) };
+    return { e, x: px, z };
   });
-  node(scene.root, shapes.floor(160, -FAR + 40), lit(theme.ground), [0, -0.05, FAR / 2]);
-  const roadMesh = shapes.floor(LANE * 3.3, -FAR + 12), roadLook = lit(theme.road), stripeMesh = shapes.floor(0.12, 2.4), stripeLook = flat('#fafafa', { opacity: 0.6 });
-  const stripes: { e: Entity; x: number; z: number }[] = [];
-  for (let p = 0; p < n; p++) {
-    node(scene.root, roadMesh, roadLook, [trackX(p), 0, FAR / 2 + 5]);
-    for (const l of [-0.5, 0.5]) for (let k = 0; k < 10; k++) { const x = trackX(p) + l * LANE, z = FAR + (k * -FAR) / 10; stripes.push({ e: node(scene.root, stripeMesh, stripeLook, [x, 0.01, z]), x, z }); }
-  }
+  // Three depths of scenery, so the world has a front, a middle and a back: small things right by the kerb (they
+  // whip past — that is where speed is felt), the trees or buildings behind them, and big far ones that barely move.
+  const scenery = [
+    ...row(44, (i) => nearProps[i % nearProps.length], () => edge + 0.4 + Math.random() * 2.2),
+    ...row(28, (i) => props[i % 6], (i) => edge + 3.2 + theme.size[i % 6] * 0.45 + Math.random() * 3),
+    ...row(16, (i) => farProps[i % farProps.length], () => edge + (night ? 24 : 12) + Math.random() * 10),
+  ];
+  // Air rushing past: faint streaks, out at the sides only (never across the road you are reading), once you are really moving.
+  const STREAKS = 26, air = instanced(scene.root, shapes.quad(0.02, 1), STREAKS, 0.5), wind = Array.from({ length: STREAKS }, (_, i) => { air.paint(i, '#ffffff'); return { x: (i % 2 ? -1 : 1) * (4 + Math.random() * 8), y: 0.6 + Math.random() * 6, z: FAR * Math.random() }; });
 
   // Runners: a skinned model each, with its own animation state. Running loops; Jump and Sitting are held poses we blend into.
   const bubbleMesh = shapes.sphere(1.5, 16), bubbleLook = flat('#f472b6', { opacity: 0.25 });
@@ -86,10 +95,10 @@ export default async function runGame({ n, stage, onEnd, hud, scene }: Game) {
       parameters: {},
     });
     for (const name of ['Running', 'Jump', 'Sitting']) anim.assignAnimation(name, (asset.resource as ContainerResource & { animations: Asset[] }).animations.map((a) => a.resource as AnimTrack).find((track) => track.name === name)!);
-    const bubble = node(holder, bubbleMesh, bubbleLook, [0, 1.1, 0]);
-    return { holder, anim, bubble, paints, now: 'Running', x: 0 };
+    const bubble = node(holder, bubbleMesh, bubbleLook, [0, 1.1, 0]), shadow = node(scene.root, dark.mesh, dark.look, [0, 0.04, 0]);
+    return { holder, anim, bubble, shadow, paints, now: 'Running', x: 0 };
   });
-  const things: Thing[][] = Array.from({ length: n }, () => []);
+  const things: Thing[][] = Array.from({ length: n }, () => []), look = { x: 0, y: 0 };
 
   const bursts = makeBursts(scene.root);
   const g = { dist: 0, nextRow: 30, row: 0, step: 0, scores: [0, 0], combo: [0, 0], hurt: [0, 0], magnet: [0, 0], double: [0, 0], shield: [false, false], said: [{ text: '', until: 0 }, { text: '', until: 0 }] };
@@ -135,6 +144,7 @@ export default async function runGame({ n, stage, onEnd, hud, scene }: Game) {
       // The robot leans as you lean, and turns a little into a lane change.
       R.holder.setLocalEulerAngles(0, (target - R.x) * -0.25 * DEG, (-pl.steer * 0.3 + (g.hurt[p] > 0 ? Math.sin(t * 40) * 0.15 : 0)) * DEG);
       show(R.bubble, g.shield[p]);
+      if (show(R.shadow, pl.present)) { const up = Math.max(0, pl.lift) * 2.4, k = 1.7 / (1 + up * 0.5); R.shadow.setLocalPosition(trackX(p) + R.x, 0.04, 0.1); R.shadow.setLocalScale(k, 1, k * 0.8); } // the shadow stays on the road and shrinks as you leave it
       // The runner is your body, continuously: it sinks as you start to bend and stretches as you rise, before any
       // jump or duck has "triggered" — so the screen answers the first centimetre of every move.
       const bend = Math.max(-0.3, Math.min(0.12, pl.lift * 0.4));
@@ -206,7 +216,15 @@ export default async function runGame({ n, stage, onEnd, hud, scene }: Game) {
     music.intensity(0.3 + Math.max(g.combo[0], g.combo[1]) / 14);
 
     for (const s of scenery) { if ((s.z += move) > 12) s.z += FAR - 12; s.e.setLocalPosition(s.x, 0, s.z); }
-    for (const s of stripes) { s.z = ((s.z - FAR + move) % -FAR) + FAR; s.e.setLocalPosition(s.x, 0.01, s.z); }
+    heaven.drive(g.dist); earth.drive(g.dist);
+    const rush = Math.min(1, Math.max(0, t / ROUND) * 0.9 + (hard - 1) * 0.15); // how far into its top speed this run is
+    wind.forEach((w, i) => { if ((w.z += move * 2.2) > 9) { w.z = FAR * (0.4 + 0.6 * Math.random()); w.x = (Math.random() < 0.5 ? -1 : 1) * (4 + Math.random() * 8); w.y = 0.6 + Math.random() * 6; } air.place(i, w.x, w.y, w.z, 1 + rush * 3); air.fade(i, Math.max(0, rush - 0.25) * 0.3); });
+    air.commit();
+    // The camera runs with you: it leans into your lean, sinks a little in a slide, and the view widens as the pace picks up.
+    const lead = players[0], sway = n === 1 ? lead.steer * 0.9 : 0, cam = scene.camera;
+    look.x += (sway - look.x) * Math.min(1, dt * 5); look.y += ((isLow(lead) && n === 1 ? -0.5 : 0) - look.y) * Math.min(1, dt * 6);
+    cam.setPosition(look.x * 0.8, 4.4 + look.y + Math.sin(g.dist * 0.9) * 0.035, 8.5); cam.lookAt(look.x * 1.6, 1.6 + look.y * 0.5, -12); cam.rotateLocal(0, 0, -look.x * 2.2);
+    cam.camera!.fov = 55 + Math.min(9, rush * 9);
     bursts.update(dt);
     scoreHud(hud, n, g.scores);
   };
