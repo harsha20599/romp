@@ -1,7 +1,7 @@
 // Wipe — the screen is filthy; scrub it clean with both hands. Grime creeps back, faster every layer.
 // Clear your whole side for a bonus and a fresh, tougher layer. Reach is body-relative, so it is compact.
 import { hardness } from '../meta.ts';
-import { instanced, shapes } from '../engine.ts';
+import { backdrop, instanced, shapes } from '../engine.ts';
 import { bursts as makeBursts, divider, hands as makeHands, music, round, scoreHud, sfx, type Game } from '../kit.ts';
 
 const ROUND = 60, COLS = 16, ROWS = 8, SCRUB = 1.15; // SCRUB = radius a hand cleans, in tiles
@@ -10,6 +10,7 @@ const LAYERS = ['#78716c', '#57534e', '#7c2d12', '#365314', '#1e3a8a'];
 export default function wipe({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage); // grime comes back sooner on higher stages
   music.start('calm', undefined, 0.6);
+  backdrop(scene, 'tiles');
   const tiles = Array.from({ length: COLS * ROWS }, (_, i) => {
     const x = (i % COLS) - COLS / 2 + 0.5, y = Math.floor(i / COLS) - ROWS / 2 + 0.5 - 0.4;
     return { x, y, zone: n === 2 && x > 0 ? 1 : 0, dirt: 1, cleanFor: 0 };

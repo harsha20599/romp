@@ -2,13 +2,14 @@
 // Any wobble costs points; a perfectly still freeze pays a bonus. Works wherever you stand, so it is compact.
 import { players, tuning } from '../pose.ts';
 import { hardness } from '../meta.ts';
-import { lit, node, shapes, show, tint } from '../engine.ts';
+import { backdrop, lit, node, shapes, show, tint } from '../engine.ts';
 import { COUNTDOWN, PLAYER_COLORS, audio, bursts as makeBursts, divider, music, say, scoreHud, sfx, zoneX, type Game } from '../kit.ts';
 
 const ROUND = 60, GRACE = 0.6; // seconds after the music stops before movement counts against you
 
 export default function freeze({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage);
+  backdrop(scene, 'disco');
   const orbMesh = shapes.facets(1.1, 1), orbLook = lit('#ffffff', { emissive: '#000000' });
   const orbs = Array.from({ length: n }, () => { const e = node(scene.root, orbMesh, orbLook); e.enabled = false; return { e, rx: 0, ry: 0 }; });
   divider(scene, n);

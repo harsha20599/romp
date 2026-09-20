@@ -8,7 +8,7 @@
 // sync) or rivals. Either way each player is quietly helped when fruit keeps getting past them: never shown, never said.
 import { Quat, Vec3, type Entity } from 'playcanvas';
 import { hardness } from '../meta.ts';
-import { clippable, fitted, flat, node, setClip, shapes, show, tint } from '../engine.ts';
+import { backdrop, clippable, fitted, flat, instanced, node, setClip, shapes, show, tint } from '../engine.ts';
 import { H, PLAYER_COLORS, bestLine, bursts as makeBursts, comboText, divider, hands as makeHands, hitSound, hitStop, music, round, say, scoreHud, segDist, sfx, swept, zoneHalf, zoneX, type Game, type StageHand } from '../kit.ts';
 
 const R = 0.75, GRAVITY = -9, FRENZY = 10, FINALE = 4.5, DEG = 180 / Math.PI;
@@ -61,6 +61,17 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
   const [fruit, bomb, star, banana] = await Promise.all([
     Promise.all(FRUIT.map((f) => fitted(`/assets/food/${f.url}.glb`, R * f.size))), fitted('/assets/kit/bomb.glb', R * 2.1), fitted('/assets/kit/star.glb', R * 1.8), fitted('/assets/food/banana.glb', R * 2.4),
   ]);
+  backdrop(scene, 'dojo');
+  // Juice stays on the wall: every cut leaves a stain and a few drops that soak away over some seconds.
+  const SPLATS = 72, stains = instanced(scene.root, shapes.blob(1), SPLATS, 0.999), wet = Array.from({ length: SPLATS }, () => ({ life: 0, x: 0, y: 0, size: 0 }));
+  let nextStain = 0;
+  const splat = (x: number, y: number, hex: string, big: boolean) => {
+    for (let k = 0; k < (big ? 5 : 3); k++) {
+      const i = (nextStain = (nextStain + 1) % SPLATS), a = Math.random() * 6.28, far = k ? 0.5 + Math.random() * (big ? 1.5 : 1) : 0;
+      Object.assign(wet[i], { life: 1, x: x + Math.cos(a) * far, y: y + Math.sin(a) * far - (k ? 0.15 : 0), size: k ? 0.12 + Math.random() * 0.2 : (big ? 0.95 : 0.7) + Math.random() * 0.25 });
+      stains.paint(i, hex);
+    }
+  };
   const capMesh = shapes.circle(1, 24), capLook = flat('#ffffff', { twoSided: true }), haloMesh = shapes.ring(1.05, 1.3, 40), haloLook = flat('#ffffff', { opacity: 0.85 });
   const add = (e: Entity) => { scene.root.addChild(e); e.enabled = false; return e; };
 
@@ -224,6 +235,7 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
         Object.assign(half, { x: pc.x, y: pc.y, vx: pc.vx + half.nx * fling, vy: pc.vy * 0.4 + half.ny * fling + 2 });
       });
       bursts.burst(pc.x, pc.y, 0.5, pc.flesh, crit ? 26 : 14, crit ? 9 : 6);
+      splat(pc.x, pc.y, pc.flesh, crit);
     };
     at.forEach((h, i) => {
       const chain = g.chain[i];
@@ -277,6 +289,8 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
         half.cap.setLocalRotation(w < 1e-6 ? q.set(1, 0, 0, 0) : q.set(v.y, -v.x, 0, w).normalize());
       });
     }
+    wet.forEach((w, i) => { if (w.life > 0) w.life -= real / 6; stains.place(i, w.x, w.y - (1 - w.life) * 0.25, -19, w.size); stains.fade(i, Math.max(0, Math.min(0.5, w.life * 0.9))); }); // they run a little as they dry
+    stains.commit();
     bursts.update(real);
     passed(total());
     music.intensity(mode === 'zen' ? 0.35 : frenzy || ending ? 1 : 0.3 + Math.max(g.combo[0], g.combo[1]) / 16);

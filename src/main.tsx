@@ -516,9 +516,10 @@ function App() {
               <div className="seg">
                 <button aria-pressed={tuning.look === 'camera'} onClick={() => setTracker('romp.look', 'camera')}>Camera</button>
                 <button aria-pressed={tuning.look === 'shadow'} onClick={() => setTracker('romp.look', 'shadow')}>Shadow</button>
+                <button aria-pressed={tuning.look === 'mirror'} onClick={() => setTracker('romp.look', 'mirror')}>Mirror</button>
                 <button aria-pressed={tuning.look === 'avatar'} onClick={() => setTracker('romp.look', 'avatar')}>Character</button>
               </div>
-              <span className="dim">In full-body games: your own picture lifted out of the room, the same shape as a glowing shadow, or a drawn character. The first two cost the tracker some speed; it falls back to the character by itself if it cannot keep up.</span>
+              <span className="dim">In full-body games. Camera: your own picture lifted out of the room. Shadow: the same shape in glowing dots. Mirror: the game played over your whole room, dimmed, with you in the light. Character: a drawn figure. Camera and Shadow cost the tracker some speed — if it cannot keep up it switches to the character by itself.</span>
             </div>
             <div className="row">
               <span className="label">Model</span>

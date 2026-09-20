@@ -5,7 +5,7 @@
 import type { GraphNode } from 'playcanvas';
 import { hardness } from '../meta.ts';
 import { players, poseMatch as match, sim } from '../pose.ts';
-import { fade, flat, node, shapes, show, tint } from '../engine.ts';
+import { backdrop, fade, flat, node, shapes, show, tint } from '../engine.ts';
 import { bursts as makeBursts, hitSound, music, round, sfx, type Game } from '../kit.ts';
 
 const D = Math.PI / 180, SHOW = 1.1, POSES_PER_ROUND = 8; // SHOW = seconds the verdict stays up
@@ -47,6 +47,7 @@ const limbError = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b),
 
 export default function shapeUp({ stage, onEnd, hud, scene }: Game) {
   const PER_POSE = Math.max(3.2, 5.2 / hardness(stage)); // less time to find the shape on higher stages
+  backdrop(scene, 'studio');
   const world = node(scene.root, undefined, undefined, [0, -0.9, 0]);
   world.setLocalScale(0.95, 0.95, 0.95);
   const wall = node(world, undefined, undefined, [0, 1.35, -1]);

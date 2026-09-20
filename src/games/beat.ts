@@ -3,7 +3,7 @@
 // All vertical, so it is compact. The clock is the AudioContext's, so notes and sound cannot drift apart.
 import { isAir, isLow, players, tuning, type Player } from '../pose.ts';
 import { hardness } from '../meta.ts';
-import { fade, flat, node, shapes, show } from '../engine.ts';
+import { backdrop, fade, flat, node, shapes, show } from '../engine.ts';
 import { COUNTDOWN, H, audio, bursts as makeBursts, comboText, countdown, divider, hitSound, inputLag, music, say, scoreHud, zoneHalf, zoneX, type Game } from '../kit.ts';
 
 const BPM = 104, BEAT = 60 / BPM, ROUND = 60, FALL = 2.4; // FALL = seconds a note is on screen before its beat
@@ -31,6 +31,7 @@ const chart = (hard: number) => {
 
 export default function beat({ n, stage, onEnd, hud, scene }: Game) {
   const notes = chart(hardness(stage));
+  backdrop(scene, 'synth');
   const mesh = { disc: shapes.circle(0.55, 24), wide: shapes.quad(3.4, 0.55), tri: shapes.circle(0.7, 3) }, looks = MOVES.map((m) => flat(m.color, { opacity: 1 }));
   // One marker per note per player, made up front and hidden until its note is on screen.
   const marks = notes.map((note) => Array.from({ length: n }, () => {

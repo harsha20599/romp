@@ -3,7 +3,7 @@
 // Pads sit inside each player's own zone, so together-play stays shoulder-wide.
 import { isLow, players } from '../pose.ts';
 import { hardness } from '../meta.ts';
-import { fade, flat, node, shapes, show, tint } from '../engine.ts';
+import { backdrop, fade, flat, node, shapes, show, tint } from '../engine.ts';
 import { bursts as makeBursts, comboText, divider, hands as makeHands, hitSound, hitStop, music, round, scoreHud, sfx, swept, zoneHalf, zoneX, type Game } from '../kit.ts';
 
 const ROUND = 60, PAD_R = 0.9, PAD_LIFE = 1.6, PADS = 6;
@@ -12,6 +12,7 @@ const BAR_EVERY = 8, BAR_WARN = 1.5, BAR_LIVE = 0.7;
 
 export default function jab({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage);
+  backdrop(scene, 'gym');
   const padMesh = shapes.circle(PAD_R, 32), ringMesh = shapes.ring(0.94, 1, 48), padLook = flat('#f43f5e', { opacity: 0.85 }), ringLook = flat('#fafafa');
   const pads = Array.from({ length: PADS * n }, (_, i) => ({ zone: i % n, x: 0, y: 0, life: 0, pop: 0, hand: 0, cross: false, pad: node(scene.root, padMesh, padLook), ring: node(scene.root, ringMesh, ringLook) }));
   const barLook = flat('#fbbf24', { opacity: 1 });

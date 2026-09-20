@@ -21,6 +21,9 @@ export type Player = {
   // [x, y, visibility, vx, vy], in shoulder-widths from the middle of the shoulders, x toward screen-right, y up.
   // Body-relative like everything else: walking about the room moves nothing here. Smoothed like the hands.
   rig: number[][];
+  // Where the body frame itself is in the (mirrored) camera picture: shoulder midpoint and shoulder-width, in units of
+  // the picture's height — x runs 0..aspect. Only the Mirror look needs it: there the game is drawn over the picture.
+  frame: { x: number; y: number; sw: number; aspect: number };
 };
 export const JOINT = { head: 0, shoulders: [11, 12], elbows: [13, 14], wrists: [15, 16], hips: [23, 24], knees: [25, 26], ankles: [27, 28], toes: [31, 32] } as const; // pairs are [screen-left, screen-right]
 
@@ -67,7 +70,7 @@ export const tuning = {
   direct: stored('romp.frames') !== 'copied', // stream camera frames straight into the tracker (off = copy them out of the <video>, the old route)
   // How players are shown in full-body games: 'camera' = their own picture, lifted out of the room; 'shadow' = the same
   // shape filled with their colour; 'avatar' = a drawn character from the skeleton (no mask needed: the cheapest).
-  look: (['camera', 'shadow', 'avatar'].includes(stored('romp.look') ?? '') ? stored('romp.look') : 'camera') as 'camera' | 'shadow' | 'avatar',
+  look: (['camera', 'shadow', 'avatar', 'mirror'].includes(stored('romp.look') ?? '') ? stored('romp.look') : 'camera') as 'camera' | 'shadow' | 'avatar' | 'mirror',
   fastCam: stored('romp.cam') !== 'standard', // take the camera's 60fps mode when it has one, even at a smaller picture
 };
 
@@ -83,6 +86,7 @@ const mkPlayer = (): Player => ({
   lean: 0,
   angles: null,
   rig: [],
+  frame: { x: 0, y: 0, sw: 0.1, aspect: 16 / 9 },
 });
 export const players: [Player, Player] = [mkPlayer(), mkPlayer()];
 export const perf = { fps: 0, delegate: '' };
@@ -221,6 +225,7 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
     pl.body = lm.map((q) => [1 - q.x, q.y, q.visibility ?? 1]);
     pl.palms = [palm(lm, 15), palm(lm, 16)].map((q) => [1 - q.x, q.y]);
     const f = { x: F.fx.next(raw.x, dt), y: F.fy.next(raw.y, dt), sw: F.sw.next(raw.sw, dt) };
+    pl.frame = { ...f, aspect };
     WRISTS.forEach((w, h) => {
       const hf = F.hands[h], r = handInZone(lm, w, aspect, nPlayers, f);
       if (r.seen) {
@@ -268,7 +273,7 @@ export const cutout = { bitmap: null as ImageBitmap | null, slots: 0, seq: 0, ms
 let cutWanted = 0;
 export function wantCutout(on: boolean) {
   cutWanted = Math.max(0, cutWanted + (on ? 1 : -1));
-  const ask = cutWanted > 0 && tuning.look !== 'avatar';
+  const ask = cutWanted > 0 && (tuning.look === 'camera' || tuning.look === 'shadow');
   if (ask !== cutout.asked) { cutout.asked = ask; worker?.postMessage({ type: 'cut', on: ask }); }
 }
 
@@ -279,7 +284,9 @@ export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0, fra
 // is cropped out of the frame and sent to a hand model after each pose result. Games never set `want`: zero cost in play.
 export const grip = { want: false, hand: 1, closed: false, curl: 0, seenAt: 0, busy: false }; // ms from camera frame to usable pose — shown next to the fps on the home screen
 
+export const feed = { video: null as HTMLVideoElement | null }; // the live camera element, for the Mirror look
 export async function startPose(video: HTMLVideoElement) {
+  feed.video = video;
   if (landmarker || worker || sim) return sim ? startSim() : undefined;
   // 1280×720: the tracker crops each person out of the frame and scales the crop to 256px. At three metres a
   // player is ~430px tall at 720p but only ~290px at 480p — the bigger frame gives the crop real detail to shrink

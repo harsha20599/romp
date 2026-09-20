@@ -163,10 +163,10 @@ th { color: var(--ink-dim); font-weight: 500; font-size: 1rem; } td.lead, .lead 
 .hud.big { top: 40%; left: 50%; transform: translate(-50%, -50%); font-size: 14rem; line-height: 1; color: var(--yellow); text-shadow: 0 0.6rem 0 rgba(0, 0, 0, 0.4), 0 0 5rem rgba(255, 225, 77, 0.6); }
 .hud.score { font-size: 2.6rem; padding: 0.2rem 1.4rem; border-radius: 2rem; background: rgba(18, 10, 46, 0.75); border: 0.22rem solid var(--tone); color: var(--tone); }
 .hud.p1, .hud.score.solo { left: 2rem; --tone: var(--p1); } .hud.p2 { right: 2rem; --tone: var(--p2); }
-.hud.banner { top: 27%; left: 50%; transform: translateX(-50%); font-size: 4.4rem; line-height: 1.1; white-space: nowrap; color: var(--yellow); text-shadow: 0 0.35rem 0 rgba(0, 0, 0, 0.45), 0 0 2.5rem rgba(255, 225, 77, 0.55); }
+.hud.banner { paint-order: stroke fill; -webkit-text-stroke: 0.6rem rgba(20, 9, 58, 0.9); top: 27%; left: 50%; transform: translateX(-50%); font-size: 4.4rem; line-height: 1.1; white-space: nowrap; color: var(--yellow); text-shadow: 0 0.35rem 0 rgba(0, 0, 0, 0.45), 0 0 2.5rem rgba(255, 225, 77, 0.55); }
 .hud.score.team { left: 2rem; --tone: var(--yellow); }
 .pops { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.pops span { position: absolute; opacity: 0; font-weight: 700; font-size: 2.2rem; white-space: nowrap; text-shadow: 0 0.2rem 0 rgba(0, 0, 0, 0.5); }
+.pops span { position: absolute; opacity: 0; font-weight: 700; font-size: 2.3rem; white-space: nowrap; paint-order: stroke fill; -webkit-text-stroke: 0.42rem rgba(20, 9, 58, 0.92); text-shadow: 0 0.22rem 0 rgba(0, 0, 0, 0.45); }
 .hud.hint { top: 6.4rem; font-size: 1.9rem; padding: 0.1rem 1.2rem; border-radius: 1.5rem; background: rgba(255, 255, 255, 0.92); color: #14093a; text-shadow: none; }
 .hud.hint.solo { left: 50%; transform: translateX(-50%); top: 7.6rem; } .hud.hint.p1 { left: 2rem; } .hud.hint.p2 { right: 2rem; }
 

@@ -4,7 +4,7 @@ import type { Entity, GraphNode } from 'playcanvas';
 import { cutout, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
 import { CUT } from './cut.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
-import { H, W, cutoutLook, flat, glowLook, instanced, node, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
+import { H, W, cutoutLook, feedUnit, flat, glowLook, instanced, node, mirrorOn, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
 export { audio, blip, jingle, music, say, sfx, whoosh } from './audio.ts';
 export { H, W, hitStop } from './engine.ts';
 export { PLAYER_COLORS } from './pace.ts';
@@ -198,10 +198,13 @@ const PADS: [Pad['part'], number, number[]][] = [['hand', 0, [15, 19]], ['hand',
 const INK = '#1b1240', DEG = 180 / Math.PI;
 export function figure(scene: Scene, p: number, at: { x: number; y: number; scale: number }) {
   const hex = PLAYER_COLORS[p], k = at.scale, group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
+  // Under the Mirror look nothing is drawn here at all — the player is already in the picture — and `at` follows
+  // them around the room instead: wherever they stand, that is where their game is.
+  const inRoom = mirrorOn();
   const pads: Pad[] = PADS.map(([part, side]) => ({ part, side, x: 0, y: 0, vx: 0, vy: 0, seen: false }));
 
   // ---- their own picture ----
-  const wantsPicture = tuning.look !== 'avatar' && !sim, look = wantsPicture ? cutoutLook(hex, tuning.look === 'shadow') : null;
+  const wantsPicture = (tuning.look === 'camera' || tuning.look === 'shadow') && !sim, look = wantsPicture ? cutoutLook(hex, tuning.look === 'shadow') : null;
   const picture = look ? node(group, shapes.quad(CUT.left * 2, CUT.up + CUT.down), look, [0, ((CUT.up - CUT.down) / 2) * k, 0]) : null;
   picture?.setLocalScale(k, k, 1);
   if (wantsPicture) { wantCutout(true); scene.cleanup(() => wantCutout(false)); }
@@ -222,8 +225,15 @@ export function figure(scene: Scene, p: number, at: { x: number; y: number; scal
   // `lookAt`: the stage point the character's eyes should follow (the nearest balloon, the newest crack).
   const update = (dt = 1 / 60, lookAt?: { x: number; y: number }) => {
     const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33;
-    if (!show(group, on)) { for (const pad of pads) pad.seen = false; return pads; }
-    const drawn = !(picture && tuning.look !== 'avatar' && refreshCutouts() > p); // (the look can fall back to the character mid-round: see pose.ts)
+    if (inRoom && on) {
+      const f = pl.frame, unit = feedUnit(f.aspect);
+      at.x = (f.x - f.aspect / 2) * unit; at.y = (0.5 - f.y) * unit; at.scale = f.sw * unit;
+    }
+    if (!show(group, on && !inRoom)) {
+      for (const pad of pads) pad.seen = false;
+      if (!on) return pads;
+    }
+    const drawn = !inRoom && !(picture && tuning.look !== 'avatar' && refreshCutouts() > p); // (the look can fall back to the character mid-round: see pose.ts)
     if (picture) { show(picture, !drawn); look!.setParameter('uSlot', [p, 1 / Math.max(1, cutout.slots), 0, 0]); look!.setParameter('uTime', performance.now() / 1000); }
     if (show(puppet, drawn)) {
       const mid = (a: number, b: number) => [(rig[a][0] + rig[b][0]) / 2, (rig[a][1] + rig[b][1]) / 2];
@@ -245,10 +255,10 @@ export function figure(scene: Scene, p: number, at: { x: number; y: number; scal
       const pad = pads[i];
       let x = 0, y = 0, vx = 0, vy = 0, vis = 1;
       for (const j of joints) { x += rig[j][0]; y += rig[j][1]; vx += rig[j][3]; vy += rig[j][4]; vis = Math.min(vis, rig[j][2]); }
-      const c = k / joints.length;
+      const c = at.scale / joints.length;
       Object.assign(pad, { x: at.x + x * c, y: at.y + y * c, vx: vx * c, vy: vy * c, seen: vis > 0.45 });
     });
     return pads;
   };
-  return { update, pads };
+  return { update, pads, at };
 }

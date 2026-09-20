@@ -6,7 +6,7 @@
 // you will be talking about afterwards.
 import type { Entity } from 'playcanvas';
 import { hardness } from '../meta.ts';
-import { flat, lit, node, shapes, show, tint } from '../engine.ts';
+import { backdrop, flat, lit, node, shapes, show, tint } from '../engine.ts';
 import { H, W, bestLine, bursts as makeBursts, divider, figure, hitSound, hitStop, music, round, say, sfx, zoneHalf, zoneX, type Game, type Pad } from '../kit.ts';
 
 const FINALE = 8, SCALE = 1.2, SHOULDER_Y = 0.55, FLOOR = -H / 2 + 0.35, CEILING = H / 2 - 0.4, POOL = 14;
@@ -17,6 +17,7 @@ type Balloon = { on: boolean; kind: 'air' | 'water' | 'storm'; x: number; y: num
 
 export default function keepy({ n, stage, mode, best, onEnd, hud, scene }: Game) {
   const hard = hardness(stage), rally = n === 2, classic = mode === 'classic', ROUND = classic ? Infinity : 60; // two players always rally: one balloon game, one score
+  backdrop(scene, 'sky', true);
   const bodies = Array.from({ length: n }, (_, p) => figure(scene, p, { x: zoneX(n, p), y: SHOULDER_Y, scale: SCALE }));
   if (rally) divider(scene, n, '#52525b', -0.5, 0.05);
   node(scene.root, shapes.quad(W, 0.12), flat('#f43f5e', { opacity: 0.55 }), [0, FLOOR - 0.3, 0.2]); // the floor line: what the balloons must not reach
@@ -39,20 +40,21 @@ export default function keepy({ n, stage, mode, best, onEnd, hud, scene }: Game)
     tint(b.e, b.hex, 'diffuse'); tint(b.e, b.hex, 'emissive');
   };
   const reachX = rally ? W / 2 - 1 : Math.min(zoneHalf(n), 3.4); // keep play over the body: nobody should have to step sideways
+  const over = () => (rally ? 0 : bodies[0].at.x); // solo, balloons come down over wherever the player is standing
   spawn('air', 0, 2.5);
 
   return (rawDt: number) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null || g.over) return;
-    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update(dt, balloons.filter((q) => q.on).sort((a, c) => Math.abs(a.x - zoneX(n, p)) - a.y * 0.3 - (Math.abs(c.x - zoneX(n, p)) - c.y * 0.3))[0]).map((pad) => ({ ...pad, p })));
+    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update(dt, balloons.filter((q) => q.on).sort((a, c) => Math.abs(a.x - b.at.x) - a.y * 0.3 - (Math.abs(c.x - b.at.x) - c.y * 0.3))[0]).map((pad) => ({ ...pad, p })));
     const progress = isFinite(ROUND) ? Math.max(0, t) / ROUND : Math.min(0.8, t / 120), finale = isFinite(ROUND) && t > ROUND - FINALE;
 
     if (t >= 0 && !finale) {
       // A second and third balloon join as the round goes on; a heavy water balloon drops in now and then.
       const air = balloons.filter((b) => b.on && b.kind === 'air').length;
-      if (t > g.nextJoin && air < (rally ? 2 : 3)) { g.nextJoin = t + 16 / hard; spawn('air', (Math.random() - 0.5) * reachX); hud.banner(air === 1 ? 'Two balloons!' : 'Three balloons!', 1300); sfx('maximize', { vol: 0.5 }); }
-      if (air === 0) spawn('air', (Math.random() - 0.5) * reachX);
-      if (t > 20 && Math.random() < dt / 9 && !balloons.some((b) => b.on && b.kind === 'water')) { spawn('water', (Math.random() - 0.5) * reachX * 1.4); hud.banner('Water balloon · worth 3', 1200); }
+      if (t > g.nextJoin && air < (rally ? 2 : 3)) { g.nextJoin = t + 16 / hard; spawn('air', over() + (Math.random() - 0.5) * reachX); hud.banner(air === 1 ? 'Two balloons!' : 'Three balloons!', 1300); sfx('maximize', { vol: 0.5 }); }
+      if (air === 0) spawn('air', over() + (Math.random() - 0.5) * reachX);
+      if (t > 20 && Math.random() < dt / 9 && !balloons.some((b) => b.on && b.kind === 'water')) { spawn('water', over() + (Math.random() - 0.5) * reachX * 1.4); hud.banner('Water balloon · worth 3', 1200); }
       if (!g.twist && progress > 0.5) { g.twist = true; hud.banner('The wind is getting up!', 1700); sfx('zapThreeToneUp', { vol: 0.6 }); }
     }
     if (finale && !g.finale) { g.finale = true; hud.banner('Balloon storm · pop them!', 1700); say('hurry_up'); for (const b of balloons) if (b.on && b.kind !== 'storm') b.kind = 'storm'; }
@@ -66,8 +68,8 @@ export default function keepy({ n, stage, mode, best, onEnd, hud, scene }: Game)
       b.vy += fall * dt; b.vx += g.wind * dt * (heavy ? 0.3 : 1);
       b.vx -= b.vx * drag * dt; b.vy -= b.vy * drag * dt;
       b.x += b.vx * dt; b.y += b.vy * dt;
-      const wall = rally ? W / 2 - b.r : reachX + 1.2;
-      if (Math.abs(b.x) > wall) { b.x = Math.sign(b.x) * wall; b.vx *= -0.7; }
+      const mid = over(), wall = rally ? W / 2 - b.r : reachX + 1.2;
+      if (Math.abs(b.x - mid) > wall) { b.x = mid + Math.sign(b.x - mid) * wall; b.vx *= -0.7; }
       if (b.y > CEILING - b.r) { b.y = CEILING - b.r; b.vy = -Math.abs(b.vy) * 0.5; }
       b.cool = b.cool.map((c) => Math.max(0, c - dt));
 

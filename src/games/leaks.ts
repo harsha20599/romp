@@ -6,10 +6,10 @@
 // of you at the same moment.
 import type { Entity } from 'playcanvas';
 import { hardness } from '../meta.ts';
-import { fade, flat, node, shapes, show, tint } from '../engine.ts';
+import { backdrop, fade, flat, node, shapes, show, tint } from '../engine.ts';
 import { H, W, bestLine, bursts as makeBursts, figure, hitSound, hitStop, music, round, say, sfx, zoneX, type Game, type Pad } from '../kit.ts';
 
-const ROUND = 60, FINALE = 9, SCALE = 1.2, SHOULDER_Y = 0.55, SPOT_R = 0.62, SEAL = 0.85, SPOTS = 9;
+const ROUND = 60, FINALE = 9, STAND = 1.2, SHOULDER_Y = 0.55, SPOT_R = 0.62, SEAL = 0.85, SPOTS = 9;
 // Where cracks can open, in shoulder-widths from the middle of the shoulders, and what the spot is asking for.
 // Every spot is reachable without taking a step: that is the rule of the room.
 const REACH: { x: number; y: number; part: string }[] = [
@@ -23,9 +23,9 @@ type Spot = { on: boolean; x: number; y: number; part: string; zone: number; sea
 
 export default function leaks({ n, stage, best, onEnd, hud, scene }: Game) {
   const hard = hardness(stage), shared = n === 2; // two players are always one crew here: the tank is one tank
-  const centre = (p: number) => ({ x: zoneX(n, p), y: SHOULDER_Y, scale: SCALE });
+  const centre = (p: number) => ({ x: zoneX(n, p), y: SHOULDER_Y, scale: STAND });
   // The tank: a pane of glass, and the water — one sheet across the whole stage, its top edge the thing to watch.
-  node(scene.root, shapes.quad(W, H), flat('#38bdf8', { opacity: 0.06 }), [0, 0, -1]);
+  backdrop(scene, 'deep', true);
   const water = node(scene.root, shapes.quad(W, H), flat('#0ea5e9', { opacity: 0.32 }), [0, -H, 0.8]), surface = node(scene.root, shapes.quad(W, 0.09), flat('#e0f2fe', { opacity: 0.9 }), [0, -H, 0.85]);
   const crackMesh = shapes.circle(1, 7), ringMesh = shapes.ring(0.86, 1, 40), patchMesh = shapes.circle(1, 28);
   const crackLook = flat('#0c1a2b', { opacity: 0.9 }), ringLook = flat('#ffffff', { opacity: 1 }), patchLook = flat('#94a3b8', { opacity: 1 });
@@ -46,12 +46,12 @@ export default function leaks({ n, stage, best, onEnd, hud, scene }: Game) {
   const open = (t: number, seam = false, mirror?: Spot) => {
     const spot = spots.find((s) => !s.on && s.sealed <= 0);
     if (!spot) return;
-    const zone = seam ? 0 : mirror ? mirror.zone : Math.floor(Math.random() * n), c = centre(zone);
+    const zone = seam ? 0 : mirror ? mirror.zone : Math.floor(Math.random() * n), c = bodies[zone].at, SCALE = c.scale; // wherever that player is standing right now
     // Early on only hands, then feet join, then knees and heads: each new body part is introduced on its own.
     const pool = REACH.filter((r) => (t < 6 ? r.part === 'hand' : t < 16 ? r.part === 'hand' || r.part === 'foot' : true) && !spots.some((s) => s.on && s.zone === zone && Math.hypot(s.x - (c.x + r.x * SCALE), s.y - (c.y + r.y * SCALE)) < 1.5));
     const r = mirror ? { x: -(mirror.x - c.x) / SCALE, y: (mirror.y - c.y) / SCALE, part: mirror.part } : pool[Math.floor(Math.random() * pool.length)];
     if (!r && !seam) return;
-    Object.assign(spot, seam ? { x: 0, y: SHOULDER_Y + (Math.random() * 2.4 - 0.6) * SCALE, part: 'hand' } : { x: c.x + r.x * SCALE, y: c.y + r.y * SCALE, part: r.part });
+    Object.assign(spot, seam ? { x: (bodies[0].at.x + bodies[1].at.x) / 2, y: (bodies[0].at.y + bodies[1].at.y) / 2 + (Math.random() * 2.4 - 0.6) * SCALE, part: 'hand' } : { x: c.x + r.x * SCALE, y: c.y + r.y * SCALE, part: r.part });
     Object.assign(spot, { on: true, zone, seam, gold: !seam && t > 12 && Math.random() < 0.12, hold: 0, age: 0, spray: 0 });
     sfx('impactGlass_heavy', { vol: 0.45, rate: 0.8 + Math.random() * 0.5 });
     hud.pop(spot.x, spot.y + 0.9, seam ? 'Both of you!' : ASK[spot.part], spot.gold ? '#fde047' : '#e0f2fe');

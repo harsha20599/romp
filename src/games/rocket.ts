@@ -2,7 +2,7 @@
 // Score is the highest altitude you reach. One body-width of floor each, so it is compact.
 import { players, tuning } from '../pose.ts';
 import { hardness } from '../meta.ts';
-import { flat, instanced, lit, node, shapes, show } from '../engine.ts';
+import { backdrop, flat, instanced, lit, node, shapes, show } from '../engine.ts';
 import { H, PLAYER_COLORS, W, bursts as makeBursts, divider, music, round, sfx, zoneX, type Game } from '../kit.ts';
 
 const ROUND = 45, STARS = 90, GRAVITY = 5, DRAG = 0.35;
@@ -10,6 +10,7 @@ const ROUND = 45, STARS = 90, GRAVITY = 5, DRAG = 0.35;
 export default function rocket({ n, stage, onEnd, hud, scene }: Game) {
   const hard = hardness(stage); // heavier gravity on higher stages
   music.start('calm', undefined, 0.5);
+  backdrop(scene, 'space');
   const stars = instanced(scene.root, shapes.circle(0.05, 6), STARS);
   const sky = Array.from({ length: STARS }, (_, i) => { stars.paint(i, '#e4e4e7'); return { x: (Math.random() - 0.5) * W, y: (Math.random() - 0.5) * H, depth: 0.3 + Math.random() * 0.7 }; });
   const groundLook = flat('#3f3f46'), hull = lit('#e4e4e7'), body = shapes.cylinder(0.38, 1.5), nose = shapes.cone(0.38, 0.8), fin = shapes.box(0.18, 0.7, 0.05);
