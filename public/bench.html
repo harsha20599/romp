@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Romp bench</title>
+<style>body{margin:0;background:#111;color:#eee;font:16px/1.4 system-ui;padding:16px}#flash{position:fixed;inset:0;display:none;z-index:9}pre{white-space:pre-wrap;font-size:13px}video{width:160px;opacity:.6}</style>
+<h2 id="status">Starting…</h2><video id="v" muted playsinline></video><div id="flash"></div><pre id="out"></pre>
+<script type="module">
+// Where does the delay live? Measures, on this device: the camera's real delivery rate and delay, the camera+screen
+// latency (by flashing the screen and watching the picture brighten), and the pose model in every configuration.
+import { FilesetResolver, PoseLandmarker } from '/wasm/vision_bundle.mjs';
+const $ = (id) => document.getElementById(id), status = (t) => ($('status').textContent = t), R = { at: new Date().toISOString(), ua: navigator.userAgent };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), med = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] ?? null, p90 = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length * 0.9)] ?? null;
+const r1 = (v) => (v == null ? v : +v.toFixed(1)), skip = new URLSearchParams(location.search);
+const frame = (v) => new Promise((r) => v.requestVideoFrameCallback((now, m) => r({ now, m })));
+window.__bench = R;
+try {
+  // A. the machine
+  const gl = document.createElement('canvas').getContext('webgl2'), dbg = gl?.getExtension('WEBGL_debug_renderer_info');
+  const adapter = await navigator.gpu?.requestAdapter().catch(() => null);
+  let n = 0; const t0 = performance.now(); await new Promise((r) => requestAnimationFrame(function f() { ++n < 60 ? requestAnimationFrame(f) : r(); }));
+  R.env = { screen: [innerWidth, innerHeight, devicePixelRatio], displayHz: r1(60000 / (performance.now() - t0)), cores: navigator.hardwareConcurrency, memGB: navigator.deviceMemory, webgl: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'no webgl2', webgpu: adapter ? (adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}` : 'yes') : 'none', mstp: typeof MediaStreamTrackProcessor };
+
+  // B. the camera, at two sizes
+  R.camera = {};
+  const v = $('v');
+  for (const [w, h] of [[1280, 720], [640, 480]]) {
+    status(`Camera ${w}×${h}…`);
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: w, height: h, frameRate: { ideal: 60 } } });
+    v.srcObject = stream; await v.play();
+    const track = stream.getVideoTracks()[0], caps = track.getCapabilities?.() ?? {}, gaps = [], delays = [], proc = [];
+    await sleep(1500); // let auto-exposure settle
+    let last = 0; const until = performance.now() + 3000;
+    while (performance.now() < until) { const { now, m } = await frame(v); if (last) gaps.push(now - last); last = now; if (m.captureTime) delays.push(now - m.captureTime); if (m.processingDuration) proc.push(m.processingDuration * 1000); }
+    const s = track.getSettings();
+    R.camera[`${w}x${h}`] = { got: `${s.width}×${s.height} @${s.frameRate}`, capsFps: caps.frameRate, deliveredFps: r1(1000 / med(gaps)), gapP90ms: r1(p90(gaps)), captureToCallbackMs: r1(med(delays)), exposureModes: caps.exposureMode, exposureTime: caps.exposureTime, iso: caps.iso };
+    if (w === 640) break; // keep the last stream? no: the tests below want 720p
+    stream.getTracks().forEach((t) => t.stop());
+  }
+  v.srcObject.getTracks().forEach((t) => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720, frameRate: { ideal: 60 } } });
+  v.srcObject = stream; await v.play(); await sleep(1000);
+
+  // C. flash: the screen goes white/black; how long until the camera's picture follows? = screen + camera latency.
+  if (!skip.has('noflash')) {
+    status('Flash test — hold a hand or paper ~15 cm in front of the camera');
+    await sleep(2500);
+    const c = new OffscreenCanvas(16, 9).getContext('2d', { willReadFrequently: true }), samples = [], flips = [], el = $('flash');
+    el.style.display = 'block'; let on = false, run = true;
+    (async () => { for (let k = 0; k < 14 && run; k++) { await new Promise((r) => requestAnimationFrame(r)); on = !on; el.style.background = on ? '#fff' : '#000'; flips.push({ t: performance.now(), on }); await sleep(600 + Math.random() * 100); } run = false; })();
+    while (run) { const { now, m } = await frame(v); c.drawImage(v, 0, 0, 16, 9); const d = c.getImageData(0, 0, 16, 9).data; let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2]; samples.push({ cap: m.captureTime ?? now, now, luma: sum / (d.length / 4) / 3 }); }
+    el.style.display = 'none';
+    const byCap = [], byNow = []; let swing = 0;
+    for (const [k, f] of flips.entries()) {
+      if (k < 2) continue; // exposure is still settling
+      const before = samples.filter((s) => s.now < f.t && s.now > f.t - 250), after = samples.filter((s) => s.now > f.t + 350 && s.now < f.t + 600);
+      if (!before.length || !after.length) continue;
+      const a = med(before.map((s) => s.luma)), b = med(after.map((s) => s.luma)), mid = (a + b) / 2; swing += Math.abs(b - a);
+      const first = samples.find((s) => s.now > f.t && (b > a ? s.luma > mid : s.luma < mid));
+      if (first && Math.abs(b - a) > 2) { byCap.push(first.cap - f.t); byNow.push(first.now - f.t); }
+    }
+    R.flash = { transitions: byNow.length, lumaSwing: r1(swing / Math.max(1, flips.length - 2)), flipToCaptureStampMs: r1(med(byCap)), flipToFrameInPageMs: r1(med(byNow)), note: 'includes ~1 display frame and half a camera frame; swing < 3 = inconclusive (nothing near the camera lit up)' };
+  }
+
+  // D. the model, every way it can be run
+  R.model = {};
+  const fileset = await FilesetResolver.forVisionTasks('/wasm');
+  for (const size of ['lite', 'full']) for (const delegate of ['GPU', 'CPU']) {
+    status(`Model ${size} on ${delegate}…`);
+    try {
+      const lm = await PoseLandmarker.createFromOptions(fileset, { baseOptions: { modelAssetPath: `/models/pose_landmarker_${size}.task`, delegate }, runningMode: 'VIDEO', numPoses: 1 });
+      const ms = []; let found = 0;
+      for (let k = 0; k < (delegate === 'CPU' ? 25 : 45); k++) { const { now } = await frame(v); const t = performance.now(), res = lm.detectForVideo(v, now); if (k >= 5) { ms.push(performance.now() - t); found += res.landmarks.length ? 1 : 0; } }
+      lm.close();
+      R.model[`${size} ${delegate}`] = { medianMs: r1(med(ms)), p90Ms: r1(p90(ms)), personFoundIn: `${found}/${ms.length}` };
+    } catch (e) { R.model[`${size} ${delegate}`] = { error: String(e) }; }
+  }
+  status('Done — sent.');
+} catch (e) { R.error = String(e); status('Failed: ' + e); }
+$('out').textContent = JSON.stringify(R, null, 1);
+R.done = true;
+fetch('/report', { method: 'POST', body: JSON.stringify({ kind: 'bench', at: R.at, ua: R.ua, screen: [], tracker: {}, data: R }) }).catch(() => {});
+</script>
