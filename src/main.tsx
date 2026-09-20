@@ -137,6 +137,7 @@ function Confetti() {
 // hands when the other is clearly higher, and once on a button it sticks until it leaves by a margin — closing a fist
 // shifts the palm a little, and that must not slide you off the button you were aiming at.
 const DWELL = 1500, STICKY = 40, BLIND_AFTER = 4000;
+const POINTER_LEAD = 0.06; // seconds of prediction the menu pointer takes. Games take ~0.2; a pointer that runs ahead and falls back feels pulled about.
 const pressMode = () => { try { return localStorage.getItem('romp.press') === 'hold' ? 'hold' : 'fist'; } catch { return 'fist'; } };
 function HandCursor() {
   const el = useRef<HTMLDivElement>(null);
@@ -155,7 +156,7 @@ function HandCursor() {
       el.current!.style.display = on ? '' : 'none';
       if (!on) return void ((x = NaN), (shownAt = 0));
       shownAt ||= now;
-      const at = predict(hand), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
+      const at = predict(hand, undefined, POINTER_LEAD), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
       y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
       el.current!.style.transform = `translate(${x}px, ${y}px)`;

@@ -32,9 +32,10 @@ export const tuning = {
   handCalm: 1.5, handQuick: 6,
   bodyCalm: 1.2, bodyQuick: 3, // shoulder frame (position + width) the hands are measured against
   liftCalm: 3.5, liftQuick: 6, // jump / crouch / lean signals
-  speedCut: 5, // (2.5 until 2026-09-20: over a ~200ms prediction, a velocity that is itself 60ms late costs more than its noise)
+  speedCut: 2.5, // the speed estimate that opens the smoothing filter up. Calm on purpose: a jumpy one lets rest-noise through.
+  leadCut: 5, // the speed estimate prediction rides on: quicker, because over a ~200ms lead a velocity that is itself 60ms late costs more than its noise
   // cutoff (Hz) on the speed estimate itself: higher = the filter notices the start of a move sooner
-  predictFrom: 0.6, predictFull: 2.5, // hand speed (zone-units/s) where prediction starts, and where it is fully on.
+  predictFrom: 1.2, predictFull: 3.5, // hand speed (zone-units/s) where prediction starts, and where it is fully on.
   // Below predictFrom a hand is "still": extrapolating a still hand only amplifies noise into wobble.
   // Delay the page cannot see: the camera's own pipeline before a frame reaches us, plus the screen's after we draw.
   // Measured on the Tab S7 (flash test, 2026-09-20): ~90ms on its own panel, ~120ms on the TV in Game mode, ~185ms
@@ -42,6 +43,7 @@ export const tuning = {
   unseen: Math.max(0, Math.min(300, Number(stored('romp.unseen') ?? 120))) / 1000,
   maxLead: 0.22, // never predict further than this, however stale the reading
   accCut: 2, // cutoff (Hz) on the acceleration estimate
+  brakeFrom: 4, // deceleration (zone-units/s²) below which a hand is not "braking" — that much is just noise in the estimate
   leanFull: 0.45, // lean (shoulder-widths) that steers fully to one side
   shiftFull: 0.7, // sideways step (shoulder-widths from where you started) that steers fully to one side
   fistAt: 1.05, openAt: 1.3, // measured: curled fingers read ~0.6, an open palm ~1.8+, so a relaxed half-open hand stays "open" // finger curl (see pose.worker.ts) below which a hand is a fist, and above which it is open again
@@ -158,17 +160,18 @@ export function assignSlots(poses: NormalizedLandmark[][], aspect: number, n: nu
 
 // One-Euro filter (Casiez et al.): heavy smoothing when still, almost none when moving fast.
 export class OneEuro {
-  x = NaN; dx = 0; ddx = 0; calm; quick;
+  x = NaN; dx = 0; v = 0; ddx = 0; calm; quick; // dx: calm speed, steers the filter · v: quick speed, for prediction · ddx: acceleration
   constructor(calm: () => number, quick: () => number) { this.calm = calm; this.quick = quick; }
   next(v: number, dt: number) {
     if (Number.isNaN(this.x)) return (this.x = v);
     const alpha = (cutoff: number) => { const r = 2 * Math.PI * cutoff * dt; return r / (r + 1); };
-    const was = this.dx;
-    this.dx += alpha(tuning.speedCut) * ((v - this.x) / dt - this.dx);
-    this.ddx += alpha(tuning.accCut) * ((this.dx - was) / dt - this.ddx);
+    const raw = (v - this.x) / dt, was = this.v;
+    this.dx += alpha(tuning.speedCut) * (raw - this.dx);
+    this.v += alpha(tuning.leadCut) * (raw - this.v);
+    this.ddx += alpha(tuning.accCut) * ((this.v - was) / dt - this.ddx);
     return (this.x += alpha(this.calm() + this.quick() * Math.abs(this.dx)) * (v - this.x));
   }
-  reset() { this.x = NaN; this.dx = this.ddx = 0; }
+  reset() { this.x = NaN; this.dx = this.v = this.ddx = 0; }
 }
 const euro = (kind: 'hand' | 'body' | 'lift') => new OneEuro(() => tuning[`${kind}Calm`], () => tuning[`${kind}Quick`]);
 const mkFilters = () => ({
@@ -212,7 +215,7 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
       const hf = F.hands[h], r = handInZone(lm, w, aspect, nPlayers, f);
       if (r.seen) {
         hf.lost = 0;
-        pl.hands[h] = { x: hf.x.next(r.x, dt), y: hf.y.next(r.y, dt), vx: hf.x.dx, vy: hf.y.dx, ax: hf.x.ddx, ay: hf.y.ddx, seen: true, t: now };
+        pl.hands[h] = { x: hf.x.next(r.x, dt), y: hf.y.next(r.y, dt), vx: hf.x.v, vy: hf.y.v, ax: hf.x.ddx, ay: hf.y.ddx, seen: true, t: now };
       } else if ((hf.lost += dt) > tuning.handHold) {
         pl.hands[h] = { ...pl.hands[h], vx: 0, vy: 0, ax: 0, ay: 0, seen: false };
         hf.x.reset(); hf.y.reset();
@@ -462,11 +465,16 @@ async function startInline(video: HTMLVideoElement, model: string) {
 // Where a hand is *now*: its last reading pushed forward by how old that reading really is — its measured age in the
 // page plus the delay the page cannot see (tuning.unseen). Straight-line extrapolation over ~200ms has one ugly
 // failure: a hand that is slowing to reverse (every slice, every punch) gets thrown far past its turning point. So a
-// braking hand is only ever carried as far as the spot where it would stop: v²/2a. Speeding up is never extrapolated.
-export function predict(hand: Hand, now = performance.now()) {
+// braking hand is only ever carried as far as the spot where it would stop: v²/2a. Only deceleration beyond
+// `brakeFrom` counts — the estimate is noisy, and a rule that flips on its sign would itself be a source of wobble.
+// `cap`: the most lead this caller wants. Games take all of it; a pointer wants precision, not anticipation.
+export function predict(hand: Hand, now = performance.now(), cap = tuning.maxLead) {
   const speed = Math.hypot(hand.vx, hand.vy), k = Math.max(0, Math.min(1, (speed - tuning.predictFrom) / (tuning.predictFull - tuning.predictFrom)));
-  const lead = Math.min(tuning.maxLead, Math.max(0, (now - hand.t) / 1000) + (sim ? 0 : tuning.unseen)) * k * k * (3 - 2 * k);
-  const carry = (v: number, a: number) => { const l = a * v < 0 ? Math.min(lead, Math.abs(v / a)) : lead; return v * l + (a * v < 0 ? 0.5 * a * l * l : 0); };
+  const lead = Math.min(cap, Math.max(0, (now - hand.t) / 1000) + (sim ? 0 : tuning.unseen)) * k * k * (3 - 2 * k);
+  const carry = (v: number, a: number) => {
+    const brake = Math.max(0, -a * Math.sign(v) - tuning.brakeFrom), l = brake > 0 ? Math.min(lead, Math.abs(v) / brake) : lead;
+    return v * l - 0.5 * Math.sign(v) * brake * l * l;
+  };
   return { x: Math.max(-1, Math.min(1, hand.x + carry(hand.vx, hand.ax))), y: Math.max(-1, Math.min(1, hand.y + carry(hand.vy, hand.ay))) };
 }
 
