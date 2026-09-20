@@ -500,7 +500,7 @@ function App() {
                 <button aria-pressed={!tuning.sharp} onClick={() => setTracker('romp.sharp', 'off')}>Off</button>
                 <button aria-pressed={tuning.sharp} onClick={() => setTracker('romp.sharp', 'on')}>On</button>
               </div>
-              <span className="dim">Short exposure. Needs a bright room.</span>
+              <span className="dim">Caps the shutter at 16 ms: less blur, steady 30 fps.</span>
             </div>
             <div className="row">
               <span className="label">Camera speed</span>

@@ -50,7 +50,7 @@ export const tuning = {
   energyDeadband: 0.05, // per-landmark travel (shoulder-widths/frame) ignored as jitter
   energyPerPoint: 12, // shoulder-widths of summed limb travel per activity point
   model: (stored('romp.model') === 'lite' ? 'lite' : 'full') as 'lite' | 'full', // full: steadier wrists, a few ms slower. Switchable on the Tracking screen.
-  sharp: stored('romp.sharp') === 'on', // short camera exposure: sharper fast hands, darker picture. Needs a well-lit room.
+  sharp: stored('romp.sharp') !== 'off', // our own auto-exposure with the shutter capped at 16ms (see tuneCamera): sharper fast hands and a steady 30fps
   direct: stored('romp.frames') !== 'copied', // stream camera frames straight into the tracker (off = copy them out of the <video>, the old route)
   fastCam: stored('romp.cam') !== 'standard', // take the camera's 60fps mode when it has one, even at a smaller picture
 };
@@ -69,6 +69,7 @@ const mkPlayer = (): Player => ({
 });
 export const players: [Player, Player] = [mkPlayer(), mkPlayer()];
 export const perf = { fps: 0, delegate: '' };
+queueMicrotask(() => Object.assign(globalThis, { __romp: { perf, track, tuning, players, grip } })); // a handle for DevTools over adb — read-only by convention
 export const sim = new URLSearchParams(globalThis.location?.search ?? '').has('sim');
 
 let nPlayers = 1;
@@ -250,16 +251,19 @@ export async function startPose(video: HTMLVideoElement) {
   const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720, frameRate: { ideal: 60 } } });
   video.srcObject = stream;
   const cam = stream.getVideoTracks()[0];
-  track.camera = await tuneCamera(cam);
   await video.play();
+  track.camera = await tuneCamera(cam, video);
   const model = `/models/pose_landmarker_${tuning.model}.task`;
   if (!(await startWorker(video, model, cam).catch(() => false))) await startInline(video, model);
 }
 
-// A smeared hand cannot be tracked accurately by any model, so where the camera allows it we take control of the
-// exposure: short shutter (sharp motion), gain pushed up to compensate. Opt-in ("Sharp motion"), because in a dim
-// room the darker, noisier picture costs more accuracy than the blur did. Every step is best-effort.
-async function tuneCamera(cam: MediaStreamTrack) {
+// A smeared hand cannot be tracked accurately by any model. Measured on the Tab S7 (2026-09-20, adb + DevTools): left
+// to itself indoors the camera exposes every frame for 40ms at ISO 50 — 40ms of blur, and only 25 frames a second,
+// because a 40ms exposure cannot fit 30 times into a second. Chrome does expose manual exposure on this camera, so we
+// run our own auto-exposure with the shutter capped: 16ms, with the gain (ISO) servoed to keep the *player* — the
+// box around the tracked player, the middle of the frame otherwise — at a sensible brightness. Only if the gain
+// runs out does the shutter lengthen, and never past one frame. "Sharp motion" off = the camera's own auto-exposure.
+async function tuneCamera(cam: MediaStreamTrack, video: HTMLVideoElement) {
   const caps = (cam.getCapabilities?.() ?? {}) as Record<string, { min: number; max: number } & string[]>, fastest = Math.round(caps.frameRate?.max ?? 0);
   // A 60fps mode halves both the wait for the next frame and the blur inside each one. That is worth a smaller
   // picture (the tracker only ever looks at a 256px crop of the player) — but never below 480 lines.
@@ -270,12 +274,33 @@ async function tuneCamera(cam: MediaStreamTrack) {
   const tryApply = (advanced: Record<string, unknown>) => cam.applyConstraints({ advanced: [advanced] } as MediaTrackConstraints).then(() => true, () => false);
   if (caps.focusMode?.includes('continuous')) await tryApply({ focusMode: 'continuous' });
   if (!tuning.sharp) return note.join(' · ');
-  if (caps.exposureMode?.includes('manual') && caps.exposureTime) {
-    const shutter = Math.max(caps.exposureTime.min, Math.min(caps.exposureTime.max, 80)); // units of 100µs → 8ms, about 1/125s
-    const ok = await tryApply({ exposureMode: 'manual', exposureTime: shutter, ...(caps.iso ? { iso: caps.iso.max } : {}) });
-    note.push(ok ? `shutter ${(shutter / 10).toFixed(0)}ms` : 'shutter refused');
-  } else note.push('camera has no manual exposure');
-  return note.join(' · ');
+  if (!caps.exposureMode?.includes('manual') || !caps.exposureTime || !caps.iso) return [...note, 'camera has no manual exposure'].join(' · ');
+
+  const FRAME = 330, clampTo = (v: number, r: { min: number; max: number }) => Math.max(r.min, Math.min(r.max, v)); // exposureTime is in units of 100µs
+  let shutter = clampTo(160, caps.exposureTime), iso = clampTo(400, caps.iso);
+  const apply = () => tryApply({ exposureMode: 'manual', exposureTime: shutter, iso });
+  if (!(await apply())) return [...note, 'shutter refused'].join(' · ');
+  const eye = new OffscreenCanvas(16, 16).getContext('2d', { willReadFrequently: true })!;
+  setInterval(() => {
+    if (!video.videoWidth || document.hidden) return;
+    const b = players[0].present ? players[0].body : null, vw = video.videoWidth, vh = video.videoHeight;
+    // Meter on the player: the box around every landmark the tracker can see (stored mirrored; the frame is not) —
+    // face, arms, clothes and a little background, so a black T-shirt alone cannot drive the gain to the ceiling.
+    const pts = b?.filter((q) => q[2] > 0.5) ?? [], xs = pts.length > 5 ? pts.map((q) => 1 - q[0]) : [0.25, 0.75], ys = pts.length > 5 ? pts.map((q) => q[1]) : [0.25, 0.75];
+    const x = Math.max(0, Math.min(...xs)), y = Math.max(0, Math.min(...ys)), w = Math.min(1, Math.max(...xs)) - x, h = Math.min(1, Math.max(...ys)) - y;
+    if (w < 0.02 || h < 0.02) return;
+    eye.drawImage(video, x * vw, y * vh, w * vw, h * vh, 0, 0, 16, 16);
+    const d = eye.getImageData(0, 0, 16, 16).data;
+    let luma = 0;
+    for (let i = 0; i < d.length; i += 4) luma += (d[i] * 2 + d[i + 1] * 5 + d[i + 2]) / 8;
+    luma /= d.length / 4;
+    const was = `${shutter}/${iso}`;
+    if (luma < 85) { if (iso < caps.iso.max) iso = clampTo(iso * 1.35, caps.iso); else shutter = Math.min(FRAME, shutter * 1.25); } // gain first; blur only as the last resort
+    else if (luma > 150) { if (shutter > 160) shutter = Math.max(160, shutter / 1.25); else if (iso > caps.iso.min) iso = clampTo(iso / 1.35, caps.iso); else shutter = clampTo(shutter / 1.25, caps.exposureTime); }
+    if (`${shutter}/${iso}` !== was) void apply();
+    track.camera = [...note, `shutter ${(shutter / 10).toFixed(0)}ms · ISO ${Math.round(iso)} · player brightness ${Math.round(luma)}`].join(' · ');
+  }, 1200);
+  return [...note, `shutter ${(shutter / 10).toFixed(0)}ms`].join(' · ');
 }
 
 // Not in TypeScript's DOM library yet.
