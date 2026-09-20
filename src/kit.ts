@@ -11,9 +11,16 @@ import { PLAYER_COLORS } from './pace.ts';
 
 export const COUNTDOWN = 3;
 // `stage` is the difficulty stage (1–5); games scale themselves with hardness(stage) from meta.ts.
-export type GameProps = { n: number; stage: number; onEnd: (scores: number[]) => void };
+// `mode` is one of the game's own modes ('' when it has none). `team`: two players, one shared score (the game must
+// then end with the same score for both). `best`: the score to beat, for this player, game, mode and stage.
+// `notes` handed to onEnd are one short list per player of what stood out ("Best slash: 5 fruit") for the results screen.
+export type GameProps = { n: number; stage: number; mode: string; team: boolean; best: number; onEnd: (scores: number[], notes?: string[][]) => void };
 type HudKey = 'clock' | 'big' | 's0' | 's1' | 'h0' | 'h1';
-export type Hud = ((key: HudKey, text: string) => void) & { flash: (color: string) => void; shake: (amount?: number) => void; p: (kind: 's' | 'h', p: number, text: string) => void };
+export type Hud = ((key: HudKey, text: string) => void) & {
+  flash: (color: string) => void; shake: (amount?: number) => void; p: (kind: 's' | 'h', p: number, text: string) => void;
+  banner: (text: string, ms?: number) => void; // a line across the middle of the stage: a twist, a power-up, "New best!"
+  pop: (x: number, y: number, text: string, color?: string, z?: number) => void; // a word that rises from a point in the scene and fades
+};
 
 // A game is a module: `build` makes the scene and returns the function to run every frame (dt in seconds, already
 // slowed during a hit-stop). An optional `view` asks for a perspective camera; the default is the flat 16×9 stage.
@@ -32,7 +39,7 @@ export const zoneX = (n: number, p: number) => (n === 1 ? 0 : (p - 0.5) * (W / 2
 let lastCue = '';
 export function countdown(hud: Hud, t: number, length: number) {
   const left = Math.ceil(t < 0 ? -t : length - t), cue = t < 0 ? String(left) : t < 0.7 ? 'go' : length - t <= 10 ? `end${left}` : '';
-  hud('clock', String(left));
+  if (isFinite(length)) hud('clock', String(left)); // an endless round (length = Infinity) owns the clock face itself: lives, say
   hud('big', t < 0 ? String(left) : t < 0.7 ? 'Go!' : '');
   if (cue === lastCue) return;
   lastCue = cue;
@@ -42,13 +49,14 @@ export function countdown(hud: Hud, t: number, length: number) {
 }
 
 // Call the returned tick(dt) once per frame: seconds into the round (negative during the countdown), or null once over.
-export function round(hud: Hud, length: number, finish: () => void) {
+// `extra` seconds of overtime after the clock reaches zero are the game's finale: t keeps counting past `length`.
+export function round(hud: Hud, length: number, finish: () => void, extra = 0) {
   const g = { t: -COUNTDOWN, done: false };
   return (dt: number) => {
     if (g.done) return null;
     g.t += Math.min(dt, 0.05);
-    countdown(hud, g.t, length);
-    if (g.t < length) return g.t;
+    countdown(hud, Math.min(g.t, length), length);
+    if (g.t < length + extra) return g.t;
     g.done = true;
     say('time_over');
     finish();
@@ -59,6 +67,16 @@ export function round(hud: Hud, length: number, finish: () => void) {
 export const scoreHud = (hud: Hud, n: number, scores: number[]) => {
   for (let p = 0; p < n; p++) hud.p('s', p, players[p].present ? String(Math.round(scores[p])) : 'Step into view');
 };
+// The score to beat. Call the returned function with the running score: the moment it passes the old best (once per
+// round, and only if there was one), the stage says so — beating yourself should be felt while it happens, not read afterwards.
+export function bestLine(hud: Hud, best: number) {
+  let told = best <= 0;
+  return (score: number) => {
+    if (told || score <= best) return;
+    told = true;
+    hud.banner('New best!', 1600); hud.flash('#fde047'); sfx('powerUp', { vol: 0.7 }); say('new_highscore');
+  };
+}
 export const comboText = (combo: number) => (combo >= 5 ? `Combo ×${combo}` : '');
 
 // Rising pitch with the combo is the oldest trick in the book, and it works: a sample for body, a blip for the climb.

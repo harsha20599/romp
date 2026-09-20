@@ -343,6 +343,15 @@ export function end() {
   canvas.style.visibility = '';
 }
 
+// Where a point in the scene sits on the stage, as fractions of its width and height (for DOM words pinned to the action).
+const spot = new Vec3(), pixel = new Vec3();
+export function toScreen(x: number, y: number, z = 0): [number, number] | null {
+  const camera = live?.root.findComponent('camera') as unknown as { worldToScreen: (world: Vec3, screen: Vec3) => Vec3 } | null;
+  if (!camera || !canvas.clientWidth) return null;
+  camera.worldToScreen(spot.set(x, y, z), pixel);
+  return [pixel.x / canvas.clientWidth, pixel.y / canvas.clientHeight];
+}
+
 export function pause(on: boolean) { paused = on; quality.last = 0; app.autoRender = !on && !!live; }
 
 // ---- the canvas lives wherever the current stage is -------------------------------------------------------------------

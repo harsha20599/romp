@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { report } from './report.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
-import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
+import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestScore, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, variantOf, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
 import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, play, say, sfx, type Playable } from './stage.tsx';
 // Each game is its own chunk: its code (and, for two of them, the physics engine) is fetched the first time it is played.
@@ -13,12 +13,15 @@ const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('.
 const ShapeUp = play(() => import('./games/shapeup.ts')), Goalie = play(() => import('./games/goalie.ts')), Smash = play(() => import('./games/smash.ts'));
 const Rocket = play(() => import('./games/rocket.ts')), Freeze = play(() => import('./games/freeze.ts')), Wipe = play(() => import('./games/wipe.ts'));
 
-type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: Playable };
+type GameMode = { id: string; name: string; blurb: string }; // id '' is the standard mode
+// `team`: the game knows how to be played by two as one team (a shared score); otherwise two players are always rivals.
+type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: Playable; modes?: GameMode[]; team?: boolean };
 // The library. A new game = one component + one row here (+ its star goals in meta.ts). maxPlayers 2 only for
 // compact-footprint games (PLAN §3); a wide game is still playable by two through "Take turns".
 const GAMES: Game[] = [
   { id: 'run', name: 'Run', icon: '🏃', tone: ['#ff8a3d', '#ff3d6e'], blurb: 'Endless runner. Lean, jump, duck.', how: 'Lean left or right to change lane. Jump the barrels and duck the beams. Never run into a crate stack. Grab coins and power-ups in the lanes.', maxPlayers: 2, Play: Run },
-  { id: 'slice', name: 'Slice', icon: '🍉', tone: ['#3ddc84', '#0e9aa7'], blurb: 'Cut the fruit, dodge the bombs.', how: 'Swipe fast through the fruit. Stars are worth 5. Never touch a bomb. The last 10 seconds are a frenzy.', maxPlayers: 2, Play: Slice },
+  { id: 'slice', name: 'Slice', icon: '🍉', tone: ['#3ddc84', '#0e9aa7'], blurb: 'Cut the fruit, dodge the bombs.', how: 'Swipe fast through the fruit. One swing through three or more pays extra, and so does a really hard cut. Glowing bananas are power-ups. Never touch a bomb.', maxPlayers: 2, Play: Slice, team: true,
+    modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, power-ups, bombs cost points' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Drop a fruit or hit a bomb and lose one' }, { id: 'zen', name: 'Zen', blurb: '90 calm seconds, no bombs. A good cool-down' }] },
   { id: 'smash', name: 'Smash', icon: '📦', tone: ['#fbbf24', '#c2570c'], blurb: 'Knock the crate tower down.', how: 'Swing your hands through the crates. Knock every one off the platform. Clear it for a bonus and a taller tower.', maxPlayers: 2, Play: Smash },
   { id: 'goalie', name: 'Goalie', icon: '🧤', tone: ['#38bdf8', '#2f55e0'], blurb: 'Get a hand to every shot.', how: 'The ring shows where the shot will land. Get a glove there in time. Swat it and it flies. Gold balls are fast and worth 3.', maxPlayers: 2, Play: Goalie },
   { id: 'jab', name: 'Jab', icon: '🥊', tone: ['#ff5a76', '#a3154a'], blurb: 'Punch the pads, duck the bar.', how: 'Punch each pad with the hand on its side. Gold pads want the opposite hand. Punch hard for extra. Squat when the bar comes.', maxPlayers: 2, Play: Jab },
@@ -34,8 +37,8 @@ const BADGE_ICON: Record<string, string> = { first: '👟', explorer: '🧭', ce
 const MODES = { solo: 'Solo', together: 'Together', turns: 'Take turns' } as const;
 type Mode = keyof typeof MODES;
 type Reward = { stars: number; xp: number; newBest: boolean; levelUp: number; badges: string[]; challenges: string[] };
-type Round = { game: Game; stage: number; turn: number; scores: number[]; points: number[]; rewards: Reward[] };
-type Screen = { at: 'start' | 'home' | 'stats' | 'badges' | 'tracking' } | { at: 'brief'; game: Game; stage: number } | ({ at: 'play' | 'next' | 'results' } & Round);
+type Round = { game: Game; stage: number; mode: string; turn: number; scores: number[]; points: number[]; rewards: Reward[]; notes: string[][] };
+type Screen = { at: 'start' | 'home' | 'stats' | 'badges' | 'tracking' } | { at: 'brief'; game: Game; stage: number; mode: string } | ({ at: 'play' | 'next' | 'results' } & Round);
 
 const vars = (v: Record<string, string | number>) => v as CSSProperties; // CSS custom properties for inline style
 const toneOf = (g: Game) => vars({ '--a': g.tone[0], '--b': g.tone[1] });
@@ -232,6 +235,7 @@ function App() {
   const [mode, setMode] = useState<Mode>('solo');
   const [fx, setFx] = useState(effects.on);
   const [paused, setPaused] = useState(false);
+  const [coop, setCoop] = useState(true); // two players: one team by default — it is what brings a couple back; rivals by choice
   const n = mode === 'together' ? 2 : 1; // bodies tracked at once; "turns" is two people, one at a time
   const energy0 = useRef([0, 0]);
   const name = (slot: number) => db.profiles[who[slot]];
@@ -289,38 +293,41 @@ function App() {
     setTaping('Sent. Thank you!');
   };
 
-  const finish = (run: Round, gameScores: number[]) => {
-    report('round', { game: run.game.id, stage: run.stage, players: n, glow: effects.on, ...paceSummary() });
+  // Two people on stage play as one team where the game knows how; what they score is then kept apart from solo scores.
+  const teamOf = (game: Game) => n === 2 && coop && !!game.team;
+  const finish = (run: Round, gameScores: number[], gameNotes: string[][] = []) => {
+    const team = teamOf(run.game), variant = variantOf(run.mode, team);
+    report('round', { game: run.game.id, stage: run.stage, mode: run.mode, team, players: n, glow: effects.on, ...paceSummary() });
     const earned = gameScores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
-    const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned];
-    if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points });
+    const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned], notes = [...run.notes, ...gameScores.map((_, i) => gameNotes[i] ?? [])];
+    if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points, notes });
 
     // Book the round one player at a time, comparing each player's progress before and after their own row lands.
     const t = Date.now(), id = run.game.id;
     let sessions = db.sessions;
     const rewards = scores.map((score, i): Reward => {
-      const me = name(i), best = summary(sessions, me).best[id] ?? 0, level = levelOf(xpOf(sessions, me)).level;
+      const me = name(i), best = bestScore(sessions, me, id, run.stage, variant), level = levelOf(xpOf(sessions, me)).level;
       const hadBadges = badgesOf(sessions, me, t), hadDone = dailyChallenges(sessions, me, NAMES, t).filter((c) => c.done).map((c) => c.id);
-      const stars = starsFor(id, run.stage, score), newBest = score > best;
+      const stars = starsFor(id, run.stage, score, variant), newBest = score > best;
       const xp = sessionXp({ points: points[i], stars, stage: run.stage, newBest });
-      sessions = [...sessions, { t, game: id, who: me, score, points: points[i], stage: run.stage, stars, xp }];
+      sessions = [...sessions, { t, game: id, who: me, score, points: points[i], stage: run.stage, stars, xp, ...(variant ? { variant } : {}) }];
       const challenges = dailyChallenges(sessions, me, NAMES, t).filter((c) => c.done && !hadDone.includes(c.id));
       sessions = [...sessions, ...challenges.map((c) => ({ t, game: `bonus:${c.id}`, who: me, score: 0, points: 0, xp: CHALLENGE_XP }))];
       const levelNow = levelOf(xpOf(sessions, me)).level;
       return { stars, xp: xp + challenges.length * CHALLENGE_XP, newBest, levelUp: levelNow > level ? levelNow : 0, badges: badgesOf(sessions, me, t).filter((b) => !hadBadges.includes(b)), challenges: challenges.map((c) => c.text) };
     });
     update({ ...db, sessions });
-    go({ ...run, at: 'results', scores, points, rewards });
+    go({ ...run, at: 'results', scores, points, rewards, notes });
     rewards.forEach((r) => Array.from({ length: r.stars }, (_, k) => setTimeout(() => sfx('select', { vol: 0.8, rate: 1 + k * 0.25, jitter: 0 }), 500 + k * 350))); // one chime per star as it pops
 
     if (rewards.some((r) => r.stars)) jingle('win');
     if (rewards.some((r) => r.levelUp)) say('level_up');
     else if (rewards.some((r) => r.challenges.length)) say('mission_completed');
     else if (rewards.some((r) => r.newBest)) say('new_highscore');
-    else if (scores.length === 2 && scores[0] === scores[1]) say('its_a_tie');
+    else if (scores.length === 2 && scores[0] === scores[1] && !team) say('its_a_tie');
     else if (rewards.some((r) => r.stars === 3)) say('congratulations');
   };
-  const play = (game: Game, stage: number) => go({ at: 'play', game, stage, turn: 0, scores: [], points: [], rewards: [] });
+  const play = (game: Game, stage: number, gameMode: string) => go({ at: 'play', game, stage, mode: gameMode, turn: 0, scores: [], points: [], rewards: [], notes: [] });
   const cycle = (slot: number) => setWho((w) => w.map((v, i) => (i === slot ? (v + 1) % db.profiles.length : v)));
   const rename = (slot: number) => {
     const old = name(slot), next = prompt('Name', old)?.trim();
@@ -331,7 +338,7 @@ function App() {
   const slots = mode === 'solo' ? [0] : [0, 1];
   const clash = slots.length === 2 && who[0] === who[1];
   // A stage is open if any of the people about to play has opened it.
-  const open = (game: Game) => Math.max(...slots.map((i) => unlockedStage(db.sessions, name(i), game.id)));
+  const open = (game: Game, gameMode = '') => Math.max(...slots.map((i) => unlockedStage(db.sessions, name(i), game.id, variantOf(gameMode, teamOf(game)))));
   const party = screen.at === 'results' && screen.rewards.some((r) => r.stars === 3 || r.levelUp || r.newBest);
   return (
     <Shell.Provider value={shell}>
@@ -387,7 +394,7 @@ function App() {
           </div>
           <div className="cards">
             {GAMES.filter((g) => g.maxPlayers >= n).map((g, i) => (
-              <button className="card" key={g.id} style={{ ...toneOf(g), ...vars({ '--i': i }) }} disabled={clash} onClick={() => go({ at: 'brief', game: g, stage: open(g) })}>
+              <button className="card" key={g.id} style={{ ...toneOf(g), ...vars({ '--i': i }) }} disabled={clash} onClick={() => go({ at: 'brief', game: g, stage: open(g), mode: '' })}>
                 <span className="icon">{g.icon}</span>
                 <b>{g.name}</b>
                 <small>{g.blurb}</small>
@@ -397,34 +404,44 @@ function App() {
           </div>
         </div>
       )}
-      {screen.at === 'brief' && (
-        <div className="screen" style={toneOf(screen.game)}>
-          <div className="row"><h1 className="grow">{screen.game.name}</h1><button className="ghost" onClick={() => go({ at: 'home' })}>← Back</button></div>
-          <div className="brief">
-            <div className="hero"><span>{screen.game.icon}</span></div>
-            <div className="col" style={{ gap: '1.3rem' }}>
-              <div className="steps">{screen.game.how.split('. ').map((step, i) => <p key={i} style={vars({ '--i': i })}>{step.replace(/\.$/, '')}</p>)}</div>
-              <div className="path">
-                {Array.from({ length: STAGES }, (_, k) => k + 1).map((st) => (
-                  <span key={st} className="row" style={{ gap: 0 }}>
-                    {st > 1 && <span className={st <= open(screen.game) ? 'link open' : 'link'} />}
-                    <button className="node" aria-pressed={screen.stage === st} disabled={st > open(screen.game)} onClick={() => go({ ...screen, stage: st })}>
-                      {st > open(screen.game) ? '🔒' : st}
-                      {st <= open(screen.game) && <small><Stars n={bestStars(db.sessions, name(0), screen.game.id, st)} /></small>}
-                    </button>
-                  </span>
-                ))}
+      {screen.at === 'brief' && (() => {
+        const { game } = screen, team = teamOf(game), variant = variantOf(screen.mode, team), opened = open(game, screen.mode);
+        return (
+          <div className="screen" style={toneOf(game)}>
+            <div className="row"><h1 className="grow">{game.name}</h1><button className="ghost" onClick={() => go({ at: 'home' })}>← Back</button></div>
+            <div className="brief">
+              <div className="hero"><span>{game.icon}</span></div>
+              <div className="col" style={{ gap: '1.3rem' }}>
+                <div className="steps">{game.how.split('. ').map((step, i) => <p key={i} style={vars({ '--i': i })}>{step.replace(/\.$/, '')}</p>)}</div>
+                {(game.modes || (n === 2 && game.team)) && (
+                  <div className="row">
+                    {game.modes && <div className="seg">{game.modes.map((m) => <button key={m.id} aria-pressed={screen.mode === m.id} onClick={() => go({ ...screen, mode: m.id, stage: Math.min(screen.stage, open(game, m.id)) })}>{m.name}</button>)}</div>}
+                    {n === 2 && game.team && <div className="seg"><button aria-pressed={coop} onClick={() => setCoop(true)}>🤝 Team</button><button aria-pressed={!coop} onClick={() => setCoop(false)}>⚔️ Versus</button></div>}
+                    <span className="dim">{[game.modes?.find((m) => m.id === screen.mode)?.blurb, n === 2 && game.team ? (team ? 'One shared score: you win or lose together' : 'Highest score wins') : ''].filter(Boolean).join(' · ')}</span>
+                  </div>
+                )}
+                <div className="path">
+                  {Array.from({ length: STAGES }, (_, k) => k + 1).map((st) => (
+                    <span key={st} className="row" style={{ gap: 0 }}>
+                      {st > 1 && <span className={st <= opened ? 'link open' : 'link'} />}
+                      <button className="node" aria-pressed={screen.stage === st} disabled={st > opened} onClick={() => go({ ...screen, stage: st })}>
+                        {st > opened ? '🔒' : st}
+                        {st <= opened && <small><Stars n={bestStars(db.sessions, name(0), game.id, st, variant)} /></small>}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="goals num">
+                  {starGoals(game.id, screen.stage, variant).map((goal, k) => <span className="goal" key={k}><Stars n={k + 1} /> {goal}</span>)}
+                  <span className="dim">Two stars open the next stage · best here {bestScore(db.sessions, name(0), game.id, screen.stage, variant)}</span>
+                </div>
+                <div className="row"><button className="primary giant" onClick={() => play(game, Math.min(screen.stage, opened), screen.mode)}>Play</button></div>
               </div>
-              <div className="goals num">
-                {starGoals(screen.game.id, screen.stage).map((goal, k) => <span className="goal" key={k}><Stars n={k + 1} /> {goal}</span>)}
-                <span className="dim">Two stars open the next stage · best here {Math.max(0, ...db.sessions.filter((s) => s.who === name(0) && s.game === screen.game.id && (s.stage ?? 1) === screen.stage).map((s) => s.score))}</span>
-              </div>
-              <div className="row"><button className="primary giant" onClick={() => play(screen.game, screen.stage)}>Play</button></div>
             </div>
           </div>
-        </div>
-      )}
-      {screen.at === 'play' && <screen.game.Play key={screen.turn} n={n} stage={screen.stage} onEnd={(scores) => finish(screen, scores)} />}
+        );
+      })()}
+      {screen.at === 'play' && <screen.game.Play key={screen.turn} n={n} stage={screen.stage} mode={screen.mode} team={teamOf(screen.game)} best={bestScore(db.sessions, name(mode === 'turns' ? screen.turn : 0), screen.game.id, screen.stage, variantOf(screen.mode, teamOf(screen.game)))} onEnd={(scores, notes) => finish(screen, scores, notes)} />}
       {screen.at === 'play' && paused && (
         <div className="pause">
           <div className="panel">
@@ -447,30 +464,31 @@ function App() {
       {screen.at === 'results' && (
         <div className="screen" style={{ alignItems: 'center' }}>
           {party && <Confetti />}
-          <h1>{screen.game.icon} {screen.game.name} · stage {screen.stage}</h1>
+          <h1>{screen.game.icon} {screen.game.name}{screen.mode ? ` ${screen.game.modes?.find((m) => m.id === screen.mode)?.name}` : ''} · stage {screen.stage}{teamOf(screen.game) ? ' · team' : ''}</h1>
           <div className="results">
             {screen.scores.map((score, i) => {
-              const r = screen.rewards[i], top = screen.scores.length === 2 && score > screen.scores[1 - i];
+              const r = screen.rewards[i], top = screen.scores.length === 2 && score > screen.scores[1 - i] && !teamOf(screen.game);
               let toast = 0;
               return (
                 <div className="panel result" key={i} style={vars({ '--tone': PLAYER_COLORS[i] })}>
                   <h2>{top && <span className="crown">👑 </span>}{name(i)}</h2>
                   <p className="score num"><CountUp to={score} /></p>
                   <div className="bigstars">{[0, 1, 2].map((k) => <span key={k} className={k < r.stars ? 'on' : ''} style={vars({ '--i': k })}>★</span>)}</div>
+                  {screen.notes[i]?.length > 0 && <p className="dim num notes">{screen.notes[i].join(' · ')}</p>}
                   <p className="num">+{r.xp} XP <span className="dim">· +{screen.points[i]} activity points</span></p>
                   <Player sessions={db.sessions} who={name(i)} tone={PLAYER_COLORS[i]} />
                   {r.newBest && <p className="toast gold" style={vars({ '--i': toast++ })}>🏆 New best!</p>}
                   {r.levelUp > 0 && <p className="toast pink" style={vars({ '--i': toast++ })}>⬆️ Level up! You are level {r.levelUp}</p>}
                   {r.challenges.map((c) => <p key={c} className="toast green" style={vars({ '--i': toast++ })}>🎯 Quest done: {c}</p>)}
                   {r.badges.map((b) => <p key={b} className="toast gold" style={vars({ '--i': toast++ })}>{BADGE_ICON[b]} Badge: {BADGES.find((x) => x.id === b)!.name}</p>)}
-                  {r.stars < 3 && <p className="dim num">Next star at {starGoals(screen.game.id, screen.stage)[r.stars]}</p>}
+                  {r.stars < 3 && <p className="dim num">Next star at {starGoals(screen.game.id, screen.stage, variantOf(screen.mode, teamOf(screen.game)))[r.stars]}</p>}
                 </div>
               );
             })}
           </div>
           <div className="row" style={{ justifyContent: 'center' }}>
-            <button className="primary" onClick={() => play(screen.game, screen.stage)}>Play again</button>
-            {screen.stage < open(screen.game) && <button onClick={() => play(screen.game, screen.stage + 1)}>Next stage →</button>}
+            <button className="primary" onClick={() => play(screen.game, screen.stage, screen.mode)}>Play again</button>
+            {screen.stage < open(screen.game, screen.mode) && <button onClick={() => play(screen.game, screen.stage + 1, screen.mode)}>Next stage →</button>}
             <button onClick={() => go({ at: 'home' })}>Home</button>
           </div>
         </div>

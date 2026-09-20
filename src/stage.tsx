@@ -17,7 +17,8 @@ export type Playable = FC<GameProps> & { warm: () => void };
 export const play = (load: () => Promise<GameModule>): Playable =>
   Object.assign((props: GameProps) => <Stage {...props} load={load} />, { warm: () => { void import('./engine.ts'); void load(); } });
 
-function Stage({ n, stage, onEnd, load }: GameProps & { load: () => Promise<GameModule> }) {
+function Stage({ n, stage, mode, team, best, onEnd, load }: GameProps & { load: () => Promise<GameModule> }) {
+  const engine = useRef<typeof import('./engine.ts') | null>(null), paused = useRef(false);
   const els = useRef<Record<string, HTMLElement | null>>({}), shown = useRef<Record<string, string>>({});
   const hud = useMemo<Hud>(() => {
     const set = (key: string, text: string) => {
@@ -30,11 +31,22 @@ function Stage({ n, stage, onEnd, load }: GameProps & { load: () => Promise<Game
     const flash = (color: string) => els.current.flash?.animate([{ background: color, opacity: 0.45 }, { background: color, opacity: 0 }], 350);
     const shake = (amount = 1) => els.current.stage?.animate(
       Array.from({ length: 7 }, (_, k) => ({ transform: k === 6 ? 'none' : `translate(${(Math.random() - 0.5) * 24 * amount}px, ${(Math.random() - 0.5) * 24 * amount}px)` })), 260);
-    return Object.assign(set, { flash, shake, p: (kind: 's' | 'h', p: number, text: string) => set(kind + p, text) });
+    let clear = 0;
+    const banner = (text: string, ms = 1400) => { set('banner', text); clearTimeout(clear); clear = window.setTimeout(() => set('banner', ''), ms); };
+    // Words that rise from where something happened. A small pool of DOM nodes, moved and animated — never created mid-round.
+    let next = 0;
+    const pop = (x: number, y: number, text: string, color = '#ffffff', z = 0) => {
+      const layer = els.current.pops, at = engine.current?.toScreen(x, y, z);
+      if (!layer || !at) return;
+      const el = layer.children[(next = (next + 1) % layer.children.length)] as HTMLElement;
+      el.textContent = text;
+      el.style.cssText = `left:${at[0] * 100}%;top:${at[1] * 100}%;color:${color}`;
+      el.animate([{ opacity: 0, transform: 'translate(-50%, -30%) scale(0.6)' }, { opacity: 1, transform: 'translate(-50%, -90%) scale(1.15)', offset: 0.2 }, { opacity: 1, transform: 'translate(-50%, -130%) scale(1)', offset: 0.7 }, { opacity: 0, transform: 'translate(-50%, -170%) scale(1)' }], { duration: 850, easing: 'ease-out' });
+    };
+    return Object.assign(set, { flash, shake, banner, pop, p: (kind: 's' | 'h', p: number, text: string) => set(kind + p, text) });
   }, []);
   const shell = useContext(Shell), finish = useRef(onEnd);
   finish.current = onEnd;
-  const engine = useRef<typeof import('./engine.ts') | null>(null), paused = useRef(false);
   useEffect(() => { paused.current = shell.paused; engine.current?.pause(shell.paused); }, [shell.paused]);
   useEffect(() => {
     let gone = false;
@@ -44,7 +56,7 @@ function Stage({ n, stage, onEnd, load }: GameProps & { load: () => Promise<Game
       if (gone) return;
       engine.current = pc;
       pc.mount(els.current.stage!);
-      const tick = await game.default({ n, stage, hud, scene: pc.begin(game.view), onEnd: (scores) => { if (!gone) finish.current(scores); }, cleanup: (fn) => cleanups.push(fn) });
+      const tick = await game.default({ n, stage, mode, team, best, hud, scene: pc.begin(game.view), onEnd: (scores, notes) => { if (!gone) finish.current(scores, notes); }, cleanup: (fn) => cleanups.push(fn) });
       if (gone) return;
       pc.run(tick);
       pc.pause(paused.current);
@@ -54,9 +66,11 @@ function Stage({ n, stage, onEnd, load }: GameProps & { load: () => Promise<Game
   const el = (key: string, className: string) => <div className={`hud ${className}`} ref={(e) => void (els.current[key] = e)} />;
   return (
     <div className="stage" ref={(e) => void (els.current.stage = e)} onClick={shell.pause}>
-      {el('flash', 'flash')}{el('clock', 'clock')}{el('big', 'big')}
-      {el('s0', n === 1 ? 'score solo' : 'score p1')}{el('h0', n === 1 ? 'hint solo' : 'hint p1')}
-      {n === 2 && el('s1', 'score p2')}{n === 2 && el('h1', 'hint p2')}
+      {el('flash', 'flash')}{el('clock', 'clock')}{el('big', 'big')}{el('banner', 'banner')}
+      <div className="pops" ref={(e) => void (els.current.pops = e)}>{Array.from({ length: 14 }, (_, k) => <span key={k} />)}</div>
+      {/* A team has one score, in the middle; each player keeps their own hint. */}
+      {el('s0', team ? 'score team' : n === 1 ? 'score solo' : 'score p1')}{el('h0', n === 1 ? 'hint solo' : 'hint p1')}
+      {n === 2 && !team && el('s1', 'score p2')}{n === 2 && el('h1', 'hint p2')}
     </div>
   );
 }

@@ -9,17 +9,24 @@ export const STARS: Record<string, [number, number, number]> = {
 };
 export const STAGES = 5;
 export const hardness = (stage: number) => 1 + (stage - 1) * 0.22; // games multiply speeds and spawn rates by this
-export const starGoals = (game: string, stage: number) => (STARS[game] ?? [10, 20, 30]).map((v) => Math.round(v * (1 + (stage - 1) * 0.3)));
-export const starsFor = (game: string, stage: number, score: number) => starGoals(game, stage).filter((goal) => score >= goal).length;
+// A game's other modes have their own goals; a team of two is asked for a bit less than twice what one player is.
+export const MODE_STARS: Record<string, [number, number, number]> = { 'slice:classic': [30, 70, 120], 'slice:zen': [40, 70, 100] };
+export const variantOf = (mode: string, team: boolean) => [mode, team ? 'team' : ''].filter(Boolean).join('+');
+export const starGoals = (game: string, stage: number, variant = '') => {
+  const team = variant.endsWith('team'), mode = variant.replace(/\+?team$/, '');
+  return ((mode && MODE_STARS[`${game}:${mode}`]) || STARS[game] || [10, 20, 30]).map((v) => Math.round(v * (1 + (stage - 1) * 0.3) * (team ? 1.8 : 1)));
+};
+export const starsFor = (game: string, stage: number, score: number, variant = '') => starGoals(game, stage, variant).filter((goal) => score >= goal).length;
 
 const mine = (sessions: Session[], who: string) => sessions.filter((s) => s.who === who);
-export function bestStars(sessions: Session[], who: string, game: string, stage: number) {
-  return Math.max(0, ...mine(sessions, who).filter((s) => s.game === game && (s.stage ?? 1) === stage).map((s) => s.stars ?? 0));
-}
-// Stage n opens once stage n-1 has two stars.
-export function unlockedStage(sessions: Session[], who: string, game: string) {
+const rounds = (sessions: Session[], who: string, game: string, stage: number, variant: string) =>
+  mine(sessions, who).filter((s) => s.game === game && (s.stage ?? 1) === stage && (s.variant ?? '') === variant);
+export const bestStars = (sessions: Session[], who: string, game: string, stage: number, variant = '') => Math.max(0, ...rounds(sessions, who, game, stage, variant).map((s) => s.stars ?? 0));
+export const bestScore = (sessions: Session[], who: string, game: string, stage: number, variant = '') => Math.max(0, ...rounds(sessions, who, game, stage, variant).map((s) => s.score));
+// Stage n opens once stage n-1 has two stars — counted per variant, so an easy mode cannot open a hard one's stages.
+export function unlockedStage(sessions: Session[], who: string, game: string, variant = '') {
   let stage = 1;
-  while (stage < STAGES && bestStars(sessions, who, game, stage) >= 2) stage++;
+  while (stage < STAGES && bestStars(sessions, who, game, stage, variant) >= 2) stage++;
   return stage;
 }
 export const totalStars = (sessions: Session[], who: string) =>
