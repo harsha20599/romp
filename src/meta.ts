@@ -4,13 +4,14 @@ import { DAY_GOAL, summary, type Session } from './stats.ts';
 
 // Score needed for 1, 2 and 3 stars at stage 1. Guesses until real scores come in — this table is the tuning knob.
 export const STARS: Record<string, [number, number, number]> = {
-  slice: [25, 50, 80], run: [400, 900, 1500], jab: [20, 40, 65], beat: [25, 50, 80], goalie: [8, 16, 26],
+  slice: [40, 80, 130], run: [400, 900, 1500], jab: [20, 40, 65], beat: [25, 50, 80], goalie: [8, 16, 26],
+  keepy: [40, 75, 115], leaks: [18, 32, 48],
   smash: [15, 30, 45], rocket: [40, 80, 130], freeze: [120, 220, 330], wipe: [120, 220, 320], shapeup: [300, 480, 640],
 };
 export const STAGES = 5;
 export const hardness = (stage: number) => 1 + (stage - 1) * 0.22; // games multiply speeds and spawn rates by this
 // A game's other modes have their own goals; a team of two is asked for a bit less than twice what one player is.
-export const MODE_STARS: Record<string, [number, number, number]> = { 'slice:classic': [30, 70, 120], 'slice:zen': [40, 70, 100] };
+export const MODE_STARS: Record<string, [number, number, number]> = { 'slice:classic': [30, 70, 120], 'slice:zen': [40, 70, 100], 'keepy:classic': [30, 70, 120] };
 export const variantOf = (mode: string, team: boolean) => [mode, team ? 'team' : ''].filter(Boolean).join('+');
 export const starGoals = (game: string, stage: number, variant = '') => {
   const team = variant.endsWith('team'), mode = variant.replace(/\+?team$/, '');

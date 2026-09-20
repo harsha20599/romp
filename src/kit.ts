@@ -177,3 +177,41 @@ export function segDist(px: number, py: number, ax: number, ay: number, bx: numb
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
+
+// The player's whole body on the stage, for games played with more than hands: a stick figure drawn from the rig,
+// and its "pads" — the parts that can touch things (hands, head, elbows, knees, feet) in stage units. Seeing your own
+// body is what makes a full-body game readable: you trust the tracking because you can watch it, and you can see
+// which foot the game thinks is where. `at` is where the middle of the shoulders sits; `scale` is stage units per
+// shoulder-width (1.25 fits a standing adult, arms up, into the 9-unit-high stage).
+const BONES = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [24, 26], [26, 28], [11, 12], [23, 24], [11, 23], [12, 24]];
+export type Pad = { part: 'hand' | 'head' | 'elbow' | 'knee' | 'foot'; side: number; x: number; y: number; vx: number; vy: number; seen: boolean };
+const PADS: [Pad['part'], number, number[]][] = [['hand', 0, [15, 19]], ['hand', 1, [16, 20]], ['head', 0, [0]], ['elbow', 0, [13]], ['elbow', 1, [14]], ['knee', 0, [25]], ['knee', 1, [26]], ['foot', 0, [27, 31]], ['foot', 1, [28, 32]]];
+export function figure(scene: Scene, p: number, at: { x: number; y: number; scale: number }, opacity = 0.9) {
+  const hex = PLAYER_COLORS[p], look = flat(hex, { opacity }), group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
+  const limbMesh = shapes.limb(0.14), bones = BONES.map(() => node(group, limbMesh, look)), head = node(group, shapes.circle(0.42, 24), look);
+  const dotMesh = shapes.circle(0.26, 16), dotLook = flat('#ffffff', { opacity: 0.95 }), dots = PADS.map(([part]) => (part === 'head' ? null : node(group, dotMesh, dotLook)));
+  const pads: Pad[] = PADS.map(([part, side]) => ({ part, side, x: 0, y: 0, vx: 0, vy: 0, seen: false }));
+  const update = () => {
+    const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33, k = at.scale;
+    if (!show(group, on)) { for (const pad of pads) pad.seen = false; return pads; }
+    BONES.forEach(([a, b], i) => {
+      const A = rig[a], B = rig[b];
+      if (!show(bones[i], A[2] > 0.4 && B[2] > 0.4)) return;
+      bones[i].setLocalPosition(A[0] * k, A[1] * k, 0);
+      bones[i].setLocalEulerAngles(0, 0, Math.atan2(B[1] - A[1], B[0] - A[0]) * (180 / Math.PI));
+      bones[i].setLocalScale(Math.hypot(B[0] - A[0], B[1] - A[1]) * k, 1, 1);
+    });
+    head.setLocalPosition(rig[0][0] * k, rig[0][1] * k, 0.05);
+    PADS.forEach(([, , joints], i) => {
+      const pad = pads[i];
+      let x = 0, y = 0, vx = 0, vy = 0, vis = 1;
+      for (const j of joints) { x += rig[j][0]; y += rig[j][1]; vx += rig[j][3]; vy += rig[j][4]; vis = Math.min(vis, rig[j][2]); }
+      const c = k / joints.length;
+      Object.assign(pad, { x: at.x + x * c, y: at.y + y * c, vx: vx * c, vy: vy * c, seen: vis > 0.45 });
+      const dot = dots[i];
+      if (dot && show(dot, pad.seen)) dot.setLocalPosition(x * c, y * c, 0.1);
+    });
+    return pads;
+  };
+  return { update, pads };
+}

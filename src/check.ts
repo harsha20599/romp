@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { assignSlots, frameClock, handInZone, isAir, isLow, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
-import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, xpOf } from './meta.ts';
+import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, variantOf, xpOf } from './meta.ts';
 
 // A body: shoulders 0.1 apart (camera frame, aspect 1) centred at cx, wrists wherever we put them.
 const body = (cx: number, sw = 0.1, wrist = { x: cx, y: 0.5 }) => {
@@ -97,17 +97,26 @@ assert.equal(summary([at(0, 30)], 'B').total, 0);
 assert.equal(summary([at(0, 30), at(6, 30), at(8, 30)], 'A').week, 60);
 
 // Progression: stars come from score vs stage goals; two stars open the next stage; XP and levels follow.
-assert.deepEqual(starGoals('slice', 1), [25, 50, 80]);
-assert.equal(starsFor('slice', 1, 60), 2);
-assert.ok(starGoals('slice', 3)[0] > 25);
+assert.deepEqual(starGoals('beat', 1), [25, 50, 80]);
+assert.equal(starsFor('beat', 1, 60), 2);
+assert.ok(starGoals('beat', 3)[0] > 25);
+// Variants: a mode has its own goals, a team is asked for 1.8x, and neither opens the standard mode's stages.
+assert.deepEqual(starGoals('slice', 1, 'classic'), [30, 70, 120]);
+assert.deepEqual(starGoals('slice', 1, 'team'), starGoals('slice', 1).map((v) => Math.round(v * 1.8)));
+assert.deepEqual(starGoals('slice', 1, 'classic+team'), [54, 126, 216]);
+assert.equal(variantOf('classic', true), 'classic+team');
+assert.equal(variantOf('', false), '');
 const played = (game: string, stage: number, score: number, points = 40, daysAgo = 0) => {
   const stars = starsFor(game, stage, score);
   return { t: Date.now() - daysAgo * 864e5, game, who: 'A', score, points, stage, stars, xp: sessionXp({ points, stars, stage, newBest: false }) };
 };
-const log = [played('slice', 1, 60), played('slice', 2, 10), played('jab', 1, 5)];
-assert.equal(bestStars(log, 'A', 'slice', 1), 2);
-assert.equal(unlockedStage(log, 'A', 'slice'), 2); // 2 stars on stage 1 opens stage 2, but stage 2 has none yet
+const log = [played('beat', 1, 60), played('beat', 2, 10), played('jab', 1, 5)];
+assert.equal(bestStars(log, 'A', 'beat', 1), 2);
+assert.equal(unlockedStage(log, 'A', 'beat'), 2); // 2 stars on stage 1 opens stage 2, but stage 2 has none yet
 assert.equal(unlockedStage(log, 'A', 'jab'), 1);
+assert.equal(unlockedStage([...log, { ...played('jab', 1, 500), variant: 'team' }], 'A', 'jab'), 1); // a team round's stars are the team variant's
+assert.equal(unlockedStage([...log, { ...played('jab', 1, 500), variant: 'team' }], 'A', 'jab', 'team'), 2);
+assert.equal(summary([{ ...played('jab', 1, 500), variant: 'team' }], 'A').best.jab, undefined); // and its score is not your solo best
 assert.equal(xpOf(log, 'A'), 40 + 40 + 40 + 40 + 10); // three sessions' points, two stars, one stage-2 bonus
 assert.deepEqual([levelOf(0).level, levelOf(59).level, levelOf(60).level, levelOf(240).level], [1, 1, 2, 3]);
 assert.ok(badgesOf(log, 'A').includes('first') && badgesOf(log, 'A').includes('century') && !badgesOf(log, 'A').includes('explorer'));

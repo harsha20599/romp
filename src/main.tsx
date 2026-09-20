@@ -11,17 +11,21 @@ import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, play, say, s
 // Each game is its own chunk: its code (and, for two of them, the physics engine) is fetched the first time it is played.
 const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('./games/run.ts')), Jab = play(() => import('./games/jab.ts')), Beat = play(() => import('./games/beat.ts'));
 const ShapeUp = play(() => import('./games/shapeup.ts')), Goalie = play(() => import('./games/goalie.ts')), Smash = play(() => import('./games/smash.ts'));
+const Leaks = play(() => import('./games/leaks.ts')), Keepy = play(() => import('./games/keepy.ts'));
 const Rocket = play(() => import('./games/rocket.ts')), Freeze = play(() => import('./games/freeze.ts')), Wipe = play(() => import('./games/wipe.ts'));
 
 type GameMode = { id: string; name: string; blurb: string }; // id '' is the standard mode
 // `team`: the game knows how to be played by two as one team (a shared score); otherwise two players are always rivals.
-type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: Playable; modes?: GameMode[]; team?: boolean };
+type Game = { id: string; name: string; icon: string; tone: [string, string]; blurb: string; how: string; maxPlayers: 1 | 2; Play: Playable; modes?: GameMode[]; team?: boolean; crew?: boolean }; // crew: two players are ALWAYS one team (there is no versus)
 // The library. A new game = one component + one row here (+ its star goals in meta.ts). maxPlayers 2 only for
 // compact-footprint games (PLAN §3); a wide game is still playable by two through "Take turns".
 const GAMES: Game[] = [
   { id: 'run', name: 'Run', icon: '🏃', tone: ['#ff8a3d', '#ff3d6e'], blurb: 'Endless runner. Lean, jump, duck.', how: 'Lean left or right to change lane. Jump the barrels and duck the beams. Never run into a crate stack. Grab coins and power-ups in the lanes.', maxPlayers: 2, Play: Run },
   { id: 'slice', name: 'Slice', icon: '🍉', tone: ['#3ddc84', '#0e9aa7'], blurb: 'Cut the fruit, dodge the bombs.', how: 'Swipe fast through the fruit. One swing through three or more pays extra, and so does a really hard cut. Glowing bananas are power-ups. Never touch a bomb.', maxPlayers: 2, Play: Slice, team: true,
     modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, power-ups, bombs cost points' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Drop a fruit or hit a bomb and lose one' }, { id: 'zen', name: 'Zen', blurb: '90 calm seconds, no bombs. A good cool-down' }] },
+  { id: 'keepy', name: 'Keepy-Uppy', icon: '🎈', tone: ['#f472b6', '#7c3aed'], blurb: 'Keep the balloon off the floor.', how: 'Bump the balloon with anything. Headers, knees and kicks pay more than hands. Do not use the same part twice running. Together, pass it across the line: every crossing is a rally point.', maxPlayers: 2, Play: Keepy, team: true, crew: true,
+    modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, more balloons, wind, and a storm to pop at the end' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Every balloon that lands costs one' }] },
+  { id: 'leaks', name: 'Leaks', icon: '💦', tone: ['#22d3ee', '#1d4ed8'], blurb: 'Plug the cracks with your whole body.', how: 'Cover a crack with a hand, a foot, a knee or your head. Hold it until the ring closes. Several open at once, so spread out. Do not let the water reach the top.', maxPlayers: 2, Play: Leaks, team: true, crew: true },
   { id: 'smash', name: 'Smash', icon: '📦', tone: ['#fbbf24', '#c2570c'], blurb: 'Knock the crate tower down.', how: 'Swing your hands through the crates. Knock every one off the platform. Clear it for a bonus and a taller tower.', maxPlayers: 2, Play: Smash },
   { id: 'goalie', name: 'Goalie', icon: '🧤', tone: ['#38bdf8', '#2f55e0'], blurb: 'Get a hand to every shot.', how: 'The ring shows where the shot will land. Get a glove there in time. Swat it and it flies. Gold balls are fast and worth 3.', maxPlayers: 2, Play: Goalie },
   { id: 'jab', name: 'Jab', icon: '🥊', tone: ['#ff5a76', '#a3154a'], blurb: 'Punch the pads, duck the bar.', how: 'Punch each pad with the hand on its side. Gold pads want the opposite hand. Punch hard for extra. Squat when the bar comes.', maxPlayers: 2, Play: Jab },
@@ -294,7 +298,7 @@ function App() {
   };
 
   // Two people on stage play as one team where the game knows how; what they score is then kept apart from solo scores.
-  const teamOf = (game: Game) => n === 2 && coop && !!game.team;
+  const teamOf = (game: Game) => n === 2 && !!game.team && (coop || !!game.crew);
   const finish = (run: Round, gameScores: number[], gameNotes: string[][] = []) => {
     const team = teamOf(run.game), variant = variantOf(run.mode, team);
     report('round', { game: run.game.id, stage: run.stage, mode: run.mode, team, players: n, glow: effects.on, ...paceSummary() });
@@ -413,10 +417,10 @@ function App() {
               <div className="hero"><span>{game.icon}</span></div>
               <div className="col" style={{ gap: '1.3rem' }}>
                 <div className="steps">{game.how.split('. ').map((step, i) => <p key={i} style={vars({ '--i': i })}>{step.replace(/\.$/, '')}</p>)}</div>
-                {(game.modes || (n === 2 && game.team)) && (
+                {(game.modes || (n === 2 && game.team && !game.crew)) && (
                   <div className="row">
                     {game.modes && <div className="seg">{game.modes.map((m) => <button key={m.id} aria-pressed={screen.mode === m.id} onClick={() => go({ ...screen, mode: m.id, stage: Math.min(screen.stage, open(game, m.id)) })}>{m.name}</button>)}</div>}
-                    {n === 2 && game.team && <div className="seg"><button aria-pressed={coop} onClick={() => setCoop(true)}>🤝 Team</button><button aria-pressed={!coop} onClick={() => setCoop(false)}>⚔️ Versus</button></div>}
+                    {n === 2 && game.team && !game.crew && <div className="seg"><button aria-pressed={coop} onClick={() => setCoop(true)}>🤝 Team</button><button aria-pressed={!coop} onClick={() => setCoop(false)}>⚔️ Versus</button></div>}
                     <span className="dim">{[game.modes?.find((m) => m.id === screen.mode)?.blurb, n === 2 && game.team ? (team ? 'One shared score: you win or lose together' : 'Highest score wins') : ''].filter(Boolean).join(' · ')}</span>
                   </div>
                 )}

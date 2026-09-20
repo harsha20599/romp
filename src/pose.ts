@@ -17,7 +17,12 @@ export type Player = {
   body: number[][]; // all 33 landmarks as [x, y, visibility], mirrored, in camera-frame units — for the presence figure and the Tracking screen
   palms: number[][]; // both palm points, same units
   angles: number[] | null; // 8 limb angles (radians, screen space) — see LIMBS
+  // The whole body, for games played with more than hands: every landmark (MediaPipe's numbering) as
+  // [x, y, visibility, vx, vy], in shoulder-widths from the middle of the shoulders, x toward screen-right, y up.
+  // Body-relative like everything else: walking about the room moves nothing here. Smoothed like the hands.
+  rig: number[][];
 };
+export const JOINT = { head: 0, shoulders: [11, 12], elbows: [13, 14], wrists: [15, 16], hips: [23, 24], knees: [25, 26], ankles: [27, 28], toes: [31, 32] } as const; // pairs are [screen-left, screen-right]
 
 const stored = (key: string) => { try { return globalThis.localStorage?.getItem(key) ?? null; } catch { return null; } };
 
@@ -74,6 +79,7 @@ const mkPlayer = (): Player => ({
   steer: 0,
   lean: 0,
   angles: null,
+  rig: [],
 });
 export const players: [Player, Player] = [mkPlayer(), mkPlayer()];
 export const perf = { fps: 0, delegate: '' };
@@ -177,10 +183,11 @@ const euro = (kind: 'hand' | 'body' | 'lift') => new OneEuro(() => tuning[`${kin
 const mkFilters = () => ({
   fx: euro('body'), fy: euro('body'), sw: euro('body'), lift: euro('lift'), lean: euro('lift'), steer: euro('lift'),
   hands: [0, 1].map(() => ({ x: euro('hand'), y: euro('hand'), lost: 0 })),
+  rig: Array.from({ length: 33 }, () => [euro('hand'), euro('hand')]),
 });
 const filters = [mkFilters(), mkFilters()];
 const resetFilters = (F: ReturnType<typeof mkFilters>) =>
-  [F.fx, F.fy, F.sw, F.lift, F.lean, F.steer, ...F.hands.flatMap((h) => [h.x, h.y])].forEach((f) => f.reset());
+  [F.fx, F.fy, F.sw, F.lift, F.lean, F.steer, ...F.hands.flatMap((h) => [h.x, h.y]), ...F.rig.flat()].forEach((f) => f.reset());
 
 const prev: (NormalizedLandmark[] | null)[] = [null, null];
 let lastApply = 0;
@@ -235,6 +242,11 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
     st.x += (raw.x - st.x) * 0.0015;
     pl.steer = F.steer.next(Math.max(-1, Math.min(1, pl.lean / tuning.leanFull + (raw.x - st.x) / f.sw / tuning.shiftFull)), dt);
     pl.angles = limbAngles(lm, aspect);
+    // The player's left is on screen-left (the TV is a mirror), so MediaPipe's odd (left) indices are screen-left too.
+    pl.rig = lm.map((q, k) => {
+      const [fx, fy] = F.rig[k], x = fx.next((mx(q, aspect) - f.x) / f.sw, dt), y = fy.next((f.y - q.y) / f.sw, dt);
+      return [x, y, q.visibility ?? 1, fx.v, fy.v];
+    });
 
     const was = prev[i];
     if (was)
@@ -541,6 +553,24 @@ function startSim() {
   };
   addEventListener('keydown', body);
   addEventListener('keyup', body);
+  // A stand-in body for the games that use all of it: the hands go where the sim hands are, Z / C swing a foot out,
+  // Q / E lift a knee, arrows move the rest. Enough to play every game with a keyboard and a mouse.
+  const pose = () => {
+    for (const pl of players.slice(0, nPlayers)) {
+      const rig: number[][] = Array.from({ length: 33 }, () => [0, 0, 1, 0, 0]), dy = pl.lift * 0.8, dx = pl.lean;
+      const set = (k: number, x: number, y: number) => { rig[k][3] = pl.rig[k] ? (x - pl.rig[k][0]) * 60 : 0; rig[k][4] = pl.rig[k] ? (y - pl.rig[k][1]) * 60 : 0; rig[k][0] = x; rig[k][1] = y; };
+      set(0, dx, 0.75 + dy);
+      [-1, 1].forEach((side, h) => {
+        const hand = pl.hands[h], knee = keys.has(h ? 'e' : 'q'), kick = keys.has(h ? 'c' : 'z');
+        set(11 + h, side * 0.5 + dx * 0.8, dy); set(23 + h, side * 0.3, -1.6 + dy * 0.6);
+        set(15 + h, hand.x * tuning.reachX[nPlayers - 1] + dx, hand.y * tuning.reachY + tuning.centerY + dy); set(19 + h, rig[15 + h][0], rig[15 + h][1]); set(13 + h, (rig[15 + h][0] + rig[11 + h][0]) / 2, (rig[15 + h][1] + rig[11 + h][1]) / 2 - 0.2);
+        set(25 + h, side * (knee ? 0.5 : 0.32), knee ? -1.5 : -2.7 + dy * 0.3); set(27 + h, side * (kick ? 1.5 : 0.35), kick ? -2.6 : knee ? -2.5 : -3.8); set(31 + h, rig[27 + h][0] + side * 0.25, rig[27 + h][1] - 0.1);
+      });
+      pl.rig = rig;
+    }
+    requestAnimationFrame(pose);
+  };
+  requestAnimationFrame(pose);
   let lastMove = 0;
   addEventListener('pointermove', (e) => {
     const now = performance.now(), dt = Math.max(1e-3, (now - lastMove) / 1000);

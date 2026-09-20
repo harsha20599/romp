@@ -38,6 +38,10 @@ survive from round to round and the context is never re-created.
 - `src/kit.ts` — what games share: round clock, hands, bursts, hit-testing, sound. `src/stage.tsx` — the React shell.
 - `src/games/*.ts` — one module per game: `export default (game) => tick`, optional `export const view` for a
   perspective camera. **A new game = one module + one row in `GAMES` (main.tsx) + its star goals (meta.ts).**
+- The depth kit (kit.ts + stage.tsx): game **modes** and **Team/Versus** chosen on the briefing screen (scores of different
+  variants are kept apart: `Session.variant`), `hud.banner` / `hud.pop`, `round(..., extra)` for finales and endless rounds,
+  `bestLine`, result notes, and `figure()` — the player's whole body on stage with touch pads (hands, head, elbows, knees,
+  feet) from `players[p].rig`. Slice is the reference for how much a game should have in it; Leaks and Keepy-Uppy for full-body play.
 - `src/physics.ts` — Rapier, fetched only by the games that use it (Goalie, Smash).
 
 The menus load ~80 KB of script (gzipped); the engine (~325 KB) and a game's code are fetched on its briefing screen.
