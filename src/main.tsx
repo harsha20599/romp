@@ -2,7 +2,7 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { createRoot } from 'react-dom/client';
-import { grip, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
+import { grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { report } from './report.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, xpOf } from './meta.ts';
@@ -278,6 +278,15 @@ function App() {
   };
   // Ten seconds of raw tracker output, sent to the build machine: the filters get tuned against the real player.
   const [taping, setTaping] = useState('');
+  // The screen flashes for ~12s (slowly — about twice a second) while the camera watches the room; see measureDelay.
+  const [delay, setDelay] = useState('');
+  const calibrate = async () => {
+    setDelay('Measuring…');
+    const ms = await measureDelay(video.current!);
+    if (ms === null) return setDelay('Could not see the screen light the room. Dim the lights or stand closer, and try again.');
+    report('delay', { ms });
+    setTracker('romp.unseen', String(ms));
+  };
   const tape = async () => {
     setTaping('Recording — wave, slice, punch, then hold still…');
     report('tape', await record(12));
@@ -517,6 +526,11 @@ function App() {
                 <button aria-pressed={!tuning.direct} onClick={() => setTracker('romp.frames', 'copied')}>Copied</button>
               </div>
               <span className="dim">Compare the ms above.</span>
+            </div>
+            <div className="row">
+              <span className="label">Delay</span>
+              <button onClick={calibrate}>Measure ({Math.round(tuning.unseen * 1000)} ms)</button>
+              <span className="dim">{delay || 'Screen + camera delay. The screen will flash slowly for 12 s.'}</span>
             </div>
             <div className="row">
               <span className="label">Tuning</span>

@@ -6,6 +6,7 @@ import { FilesetResolver, HandLandmarker, PoseLandmarker } from '@mediapipe/task
 type Fileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 let fileset: Fileset, landmarker: PoseLandmarker | undefined, hands: HandLandmarker | null | undefined, origin = '';
 let clockShift = 0; // worker clock → page clock: each has its own performance.now() zero
+let wantLuma = false, lumaBuf = new Uint8Array(0); // delay calibration: report each frame's brightness alongside its pose
 let gripRect: number[] | null = null; // [x, y, size] as fractions of the frame, while a menu wants the fist read
 const gpuThenCpu = <T,>(make: (delegate: 'GPU' | 'CPU') => Promise<T>) => make('GPU').then((v) => ({ v, delegate: 'GPU' }), () => make('CPU').then((v) => ({ v, delegate: 'CPU' })));
 
@@ -42,9 +43,18 @@ async function pump(readable: ReadableStream<VideoFrame>) {
     first ||= ts - 1;
     sent = Math.max(sent + 1, ts - first); // the model wants strictly increasing timestamps
     try {
-      const t0 = performance.now(), landmarks = landmarker.detectForVideo(frame, sent).landmarks;
+      const t0 = performance.now(), landmarks = landmarker.detectForVideo(frame, sent).landmarks, ms = performance.now() - t0;
       proven = true;
-      postMessage({ type: 'pose', landmarks, ts, arrived, ms: performance.now() - t0, aspect: frame.displayWidth / frame.displayHeight });
+      let luma: number | undefined;
+      if (wantLuma) { // the Y plane leads every camera format Chrome hands out (I420, NV12); a sparse sample of it is plenty
+        if (lumaBuf.length < frame.allocationSize()) lumaBuf = new Uint8Array(frame.allocationSize());
+        await frame.copyTo(lumaBuf);
+        const n = frame.codedWidth * frame.codedHeight;
+        let sum = 0, count = 0;
+        for (let i = 0; i < n; i += 97) { sum += lumaBuf[i]; count++; }
+        luma = sum / count;
+      }
+      postMessage({ type: 'pose', landmarks, ts, arrived, ms, luma, aspect: frame.displayWidth / frame.displayHeight });
       if (gripRect) {
         const [x, y, size] = gripRect, w = frame.displayWidth, h = frame.displayHeight, px = Math.round(size * w);
         const crop = await createImageBitmap(frame, Math.round(x * w), Math.round(y * h), px, px, { resizeWidth: 224, resizeHeight: 224, resizeQuality: 'medium' }).catch(() => null);
@@ -77,6 +87,7 @@ self.onmessage = async (e: MessageEvent) => {
   } else if (m.type === 'players') await landmarker?.setOptions({ numPoses: m.n });
   else if (m.type === 'stream') void pump(m.readable);
   else if (m.type === 'grip') gripRect = m.rect;
+  else if (m.type === 'luma') wantLuma = m.on;
   else if (m.type === 'frame' && landmarker) {
     const t0 = performance.now(), landmarks = landmarker.detectForVideo(m.bitmap, m.t).landmarks;
     m.bitmap.close();

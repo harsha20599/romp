@@ -51,10 +51,32 @@ for (let k = 0; k < 30; k++) out = fast.next(k / 10, 1 / 30); // 3 zone-units pe
 assert.ok(2.9 - out < 0.25, `lagging ${2.9 - out} behind a fast hand`);
 
 // Prediction: a hand moving right at 2 units/s, read 70ms ago, is drawn ahead of its reading — but never past maxLead.
-const moving = { x: 0, y: 0, vx: 3, vy: 0, seen: true, t: 1000 };
-assert.ok(Math.abs(predict(moving, 1070).x - 3 * (0.07 + tuning.lookahead)) < 1e-9);
+const moving = { x: 0, y: 0, vx: 3, vy: 0, ax: 0, ay: 0, seen: true, t: 1000 };
+assert.ok(Math.abs(predict(moving, 1070).x - 3 * (0.07 + tuning.unseen)) < 1e-9);
 assert.ok(Math.abs(predict(moving, 9000).x - 3 * tuning.maxLead) < 1e-9);
 assert.equal(predict({ ...moving, vx: 0.4 }, 1070).x, 0); // a hand that is barely moving is left exactly where it was read: no wobble
+assert.ok(Math.abs(predict({ ...moving, ax: -30 }, 1070).x - 3 * 3 / 30 / 2) < 1e-9); // braking hard: carried to where it would stop (v²/2a), not 0.57 away
+
+// The whole chain on a slicing hand: a full there-and-back swing every 1.7s, seen 30 times a second with tracker noise, judged against
+// where the hand really is 200ms after each frame was taken. Prediction must beat drawing the stale reading, and the
+// braking limit must beat plain straight-line extrapolation where it matters — the overshoot at each turn.
+{
+  const L = 0.2, fx = new OneEuro(() => tuning.handCalm, () => tuning.handQuick), truth = (t: number) => 0.8 * Math.sin(2 * Math.PI * 0.6 * t);
+  let seed = 7; const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.012;
+  const err = { stale: 0, line: 0, braked: 0 }, worst = { line: 0, braked: 0 };
+  for (let k = 0; k < 300; k++) {
+    const t = k / 30, x = fx.next(truth(t) + noise(), 1 / 30), hand = { x, y: 0, vx: fx.dx, vy: 0, ax: fx.ddx, ay: 0, seen: true, t: t * 1000 };
+    if (k < 30) continue;
+    const want = truth(t + L), at = (h: typeof hand) => predict(h, t * 1000 + L * 1000 - tuning.unseen * 1000).x; // total lead = L
+    const e = { stale: x - want, line: at({ ...hand, ax: 0 }) - want, braked: at(hand) - want };
+    for (const key of ['stale', 'line', 'braked'] as const) err[key] += e[key] ** 2;
+    worst.line = Math.max(worst.line, Math.abs(e.line)); worst.braked = Math.max(worst.braked, Math.abs(e.braked));
+  }
+  const rms = (v: number) => Math.sqrt(v / 270);
+  console.log(`prediction over 200ms on a slicing hand — rms error: stale ${rms(err.stale).toFixed(3)}, straight-line ${rms(err.line).toFixed(3)}, braked ${rms(err.braked).toFixed(3)}; worst: straight-line ${worst.line.toFixed(3)}, braked ${worst.braked.toFixed(3)}`);
+  assert.ok(rms(err.braked) < rms(err.stale) * 0.55, 'prediction should recover about half of a 200ms lag'); // the rest needs curvature — a tape-tuned job
+  assert.ok(rms(err.braked) <= rms(err.line) && worst.braked <= worst.line, 'braking limit should not be worse than a straight line');
+}
 
 // The palm: a blend of wrist and knuckles, so one noisy point moves it by only its share; hidden points drop out.
 const hand = body(0.5);

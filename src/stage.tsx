@@ -5,7 +5,7 @@ import { Canvas, useFrame, useThree, type CameraProps, type RootState } from '@r
 import { PerformanceMonitor, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
-import { players, predict, sim, track } from './pose.ts';
+import { players, predict, sim, track, tuning } from './pose.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
 export { audio, blip, jingle, music, say, sfx, whoosh } from './audio.ts';
 
@@ -22,9 +22,9 @@ export type Hud = ((key: HudKey, text: string) => void) & { flash: (color: strin
 // frame loop stops (so every game's clock stops with it). Context, so no game has to know any of this exists.
 export const Shell = createContext({ paused: false, pause: () => {} });
 
-// How long ago the player actually did what the game is only now seeing: measured camera-to-tracker age, plus a
-// flat allowance for smoothing, one render frame and the TV. Timing games judge against the past by this much.
-export const inputLag = () => (sim ? 0 : Math.max(0.06, Math.min(0.3, (track.lag + 45) / 1000)));
+// How long ago the player actually did what the game is only now seeing: measured frame-to-tracker age, plus the
+// measured delay the page cannot see (camera pipeline + screen). Timing games judge against the past by this much.
+export const inputLag = () => (sim ? 0 : Math.max(0.06, Math.min(0.4, track.lag / 1000 + tuning.unseen)));
 
 // Hit-stop: on a big impact the game's clock all but stops for a few frames. It reads as weight, and it puts the
 // feedback exactly where the eye is. Games that want it run their loop through useTick instead of useFrame.

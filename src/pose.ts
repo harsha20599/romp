@@ -4,7 +4,8 @@ import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision
 
 // x, y: -1..1 inside the player's own zone, y up. vx, vy: zone-units per second, measured at camera rate.
 // t: when the camera frame behind this reading was captured (performance.now clock) — the renderer predicts forward from it.
-export type Hand = { x: number; y: number; vx: number; vy: number; seen: boolean; t: number };
+// ax, ay: acceleration, zone-units/s² — only trusted for one thing: knowing when a hand is braking (see predict).
+export type Hand = { x: number; y: number; vx: number; vy: number; ax: number; ay: number; seen: boolean; t: number };
 export type Player = {
   present: boolean;
   hands: [Hand, Hand]; // [screen-left, screen-right]
@@ -31,11 +32,16 @@ export const tuning = {
   handCalm: 1.5, handQuick: 6,
   bodyCalm: 1.2, bodyQuick: 3, // shoulder frame (position + width) the hands are measured against
   liftCalm: 3.5, liftQuick: 6, // jump / crouch / lean signals
-  speedCut: 2.5, // cutoff (Hz) on the speed estimate itself: higher = the filter notices the start of a move sooner
+  speedCut: 5, // (2.5 until 2026-09-20: over a ~200ms prediction, a velocity that is itself 60ms late costs more than its noise)
+  // cutoff (Hz) on the speed estimate itself: higher = the filter notices the start of a move sooner
   predictFrom: 0.6, predictFull: 2.5, // hand speed (zone-units/s) where prediction starts, and where it is fully on.
   // Below predictFrom a hand is "still": extrapolating a still hand only amplifies noise into wobble.
-  lookahead: 0.03, // seconds predicted ahead on top of measured camera-to-screen age — hides tracking latency
-  maxLead: 0.14, // never predict further than this, however stale the reading
+  // Delay the page cannot see: the camera's own pipeline before a frame reaches us, plus the screen's after we draw.
+  // Measured on the Tab S7 (flash test, 2026-09-20): ~90ms on its own panel, ~120ms on the TV in Game mode, ~185ms
+  // on the TV outside it. "Measure delay" on the Tracking screen re-measures it for whatever screen is plugged in.
+  unseen: Math.max(0, Math.min(300, Number(stored('romp.unseen') ?? 120))) / 1000,
+  maxLead: 0.22, // never predict further than this, however stale the reading
+  accCut: 2, // cutoff (Hz) on the acceleration estimate
   leanFull: 0.45, // lean (shoulder-widths) that steers fully to one side
   shiftFull: 0.7, // sideways step (shoulder-widths from where you started) that steers fully to one side
   fistAt: 1.05, openAt: 1.3, // measured: curled fingers read ~0.6, an open palm ~1.8+, so a relaxed half-open hand stays "open" // finger curl (see pose.worker.ts) below which a hand is a fist, and above which it is open again
@@ -57,7 +63,7 @@ export const tuning = {
 
 const mkPlayer = (): Player => ({
   present: false,
-  hands: [{ x: 0, y: 0, vx: 0, vy: 0, seen: false, t: 0 }, { x: 0, y: 0, vx: 0, vy: 0, seen: false, t: 0 }],
+  hands: [{ x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, seen: false, t: 0 }, { x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, seen: false, t: 0 }],
   energy: 0,
   body: [],
   palms: [],
@@ -152,15 +158,17 @@ export function assignSlots(poses: NormalizedLandmark[][], aspect: number, n: nu
 
 // One-Euro filter (Casiez et al.): heavy smoothing when still, almost none when moving fast.
 export class OneEuro {
-  x = NaN; dx = 0; calm; quick;
+  x = NaN; dx = 0; ddx = 0; calm; quick;
   constructor(calm: () => number, quick: () => number) { this.calm = calm; this.quick = quick; }
   next(v: number, dt: number) {
     if (Number.isNaN(this.x)) return (this.x = v);
     const alpha = (cutoff: number) => { const r = 2 * Math.PI * cutoff * dt; return r / (r + 1); };
+    const was = this.dx;
     this.dx += alpha(tuning.speedCut) * ((v - this.x) / dt - this.dx);
+    this.ddx += alpha(tuning.accCut) * ((this.dx - was) / dt - this.ddx);
     return (this.x += alpha(this.calm() + this.quick() * Math.abs(this.dx)) * (v - this.x));
   }
-  reset() { this.x = NaN; this.dx = 0; }
+  reset() { this.x = NaN; this.dx = this.ddx = 0; }
 }
 const euro = (kind: 'hand' | 'body' | 'lift') => new OneEuro(() => tuning[`${kind}Calm`], () => tuning[`${kind}Quick`]);
 const mkFilters = () => ({
@@ -204,9 +212,9 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
       const hf = F.hands[h], r = handInZone(lm, w, aspect, nPlayers, f);
       if (r.seen) {
         hf.lost = 0;
-        pl.hands[h] = { x: hf.x.next(r.x, dt), y: hf.y.next(r.y, dt), vx: hf.x.dx, vy: hf.y.dx, seen: true, t: now };
+        pl.hands[h] = { x: hf.x.next(r.x, dt), y: hf.y.next(r.y, dt), vx: hf.x.dx, vy: hf.y.dx, ax: hf.x.ddx, ay: hf.y.ddx, seen: true, t: now };
       } else if ((hf.lost += dt) > tuning.handHold) {
-        pl.hands[h] = { ...pl.hands[h], vx: 0, vy: 0, seen: false };
+        pl.hands[h] = { ...pl.hands[h], vx: 0, vy: 0, ax: 0, ay: 0, seen: false };
         hf.x.reset(); hf.y.reset();
       }
     });
@@ -366,6 +374,7 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
     const now = performance.now(), t = m.ts === undefined ? m.t : clock.time(m.ts, m.arrived);
     aspect = m.aspect ?? video.videoWidth / video.videoHeight;
     apply(m.landmarks, aspect, t);
+    if (m.luma !== undefined) lumaTap?.(t, m.luma);
     tape?.push([Math.round(t), Math.round(now - t), m.landmarks.map((lm: NormalizedLandmark[]) => lm.flatMap((q) => [+q.x.toFixed(4), +q.y.toFixed(4), +(q.visibility ?? 1).toFixed(2)]))]);
     perf.fps += (1000 / (now - last) - perf.fps) * 0.1;
     track.lag += (now - t - track.lag) * 0.1;
@@ -450,11 +459,58 @@ async function startInline(video: HTMLVideoElement, model: string) {
   video.requestVideoFrameCallback(tick);
 }
 
-// Where a hand is *now*: its last reading pushed forward along its own velocity by the reading's age.
+// Where a hand is *now*: its last reading pushed forward by how old that reading really is — its measured age in the
+// page plus the delay the page cannot see (tuning.unseen). Straight-line extrapolation over ~200ms has one ugly
+// failure: a hand that is slowing to reverse (every slice, every punch) gets thrown far past its turning point. So a
+// braking hand is only ever carried as far as the spot where it would stop: v²/2a. Speeding up is never extrapolated.
 export function predict(hand: Hand, now = performance.now()) {
   const speed = Math.hypot(hand.vx, hand.vy), k = Math.max(0, Math.min(1, (speed - tuning.predictFrom) / (tuning.predictFull - tuning.predictFrom)));
-  const lead = Math.min(tuning.maxLead, Math.max(0, (now - hand.t) / 1000) + tuning.lookahead) * k * k * (3 - 2 * k);
-  return { x: Math.max(-1, Math.min(1, hand.x + hand.vx * lead)), y: Math.max(-1, Math.min(1, hand.y + hand.vy * lead)) };
+  const lead = Math.min(tuning.maxLead, Math.max(0, (now - hand.t) / 1000) + (sim ? 0 : tuning.unseen)) * k * k * (3 - 2 * k);
+  const carry = (v: number, a: number) => { const l = a * v < 0 ? Math.min(lead, Math.abs(v / a)) : lead; return v * l + (a * v < 0 ? 0.5 * a * l * l : 0); };
+  return { x: Math.max(-1, Math.min(1, hand.x + carry(hand.vx, hand.ax))), y: Math.max(-1, Math.min(1, hand.y + carry(hand.vy, hand.ay))) };
+}
+
+// Measures tuning.unseen on the spot: the screen flashes white/black ~2x a second, the camera watches the room
+// brighten and dim, and the delay from "page changed the screen" to "page received a picture that shows it" is exactly
+// the part of the loop no timestamp can see — display chain + camera pipeline. One flash is buried in noise; twenty
+// folded on top of each other are not. Returns ms, or null if the room never visibly changed (too bright / screen too small).
+let lumaTap: ((t: number, luma: number) => void) | null = null;
+export async function measureDelay(video: HTMLVideoElement, flips = 24) {
+  const el = document.body.appendChild(Object.assign(document.createElement('div'), { style: 'position:fixed;inset:0;z-index:99;background:#000' }));
+  const eye = new OffscreenCanvas(16, 9).getContext('2d', { willReadFrequently: true })!, samples: [number, number][] = [], marks: { t: number; on: boolean }[] = [];
+  let running = true, on = false;
+  const watch = (now: number) => {
+    if (!running) return;
+    eye.drawImage(video, 0, 0, 16, 9);
+    const d = eye.getImageData(0, 0, 16, 9).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+    samples.push([now, sum / (d.length / 4) / 3]);
+    video.requestVideoFrameCallback(watch);
+  };
+  // Watch through the tracker's own eyes where possible — the streamed frames, stamped as they reach the browser —
+  // so the figure is the delay the tracker actually suffers, with the model running. Else through the <video>.
+  if (worker && track.frames === 'direct') { lumaTap = (t, v) => samples.push([t, v]); worker.postMessage({ type: 'luma', on: true }); }
+  else video.requestVideoFrameCallback(watch);
+  for (let k = 0; k < flips; k++) {
+    await new Promise((r) => requestAnimationFrame(r));
+    on = !on; el.style.background = on ? '#fff' : '#000'; marks.push({ t: performance.now(), on });
+    await new Promise((r) => setTimeout(r, 430 + Math.random() * 120)); // jittered, so nothing periodic in the room can line up with it
+  }
+  running = false; el.remove(); lumaTap = null; worker?.postMessage({ type: 'luma', on: false });
+  // Fold: every flash's response, sign-corrected, in 10ms bins relative to its own flip.
+  const bins: number[][] = Array.from({ length: 40 }, () => []);
+  for (const m of marks.slice(2)) { // the first two are spent letting the camera's exposure settle
+    const before = samples.filter(([t]) => t < m.t && t > m.t - 250).map(([, v]) => v);
+    if (!before.length) continue;
+    const base = before.reduce((a, b) => a + b) / before.length;
+    for (const [t, v] of samples) { const dt = t - m.t; if (dt >= 0 && dt < 400) bins[Math.floor(dt / 10)].push((m.on ? 1 : -1) * (v - base)); }
+  }
+  const curve = bins.map((b) => (b.length ? b.reduce((a, c) => a + c) / b.length : NaN)), late = curve.slice(30).filter((v) => !Number.isNaN(v));
+  const settled = late.reduce((a, b) => a + b, 0) / Math.max(1, late.length);
+  if (Math.abs(settled) < 0.6) return null;
+  const half = curve.findIndex((v) => !Number.isNaN(v) && v / settled > 0.5); // halfway up = the middle of the exposure that caught it
+  return half < 0 ? null : half * 10 + 5;
 }
 
 // ?sim — the mouse is everyone's right hand; arrows jump/crouch/lean; A / D raise the left / right hand; F closes the fist.
@@ -471,8 +527,8 @@ function startSim() {
       pl.liftV = 0;
       pl.lean = keys.has('ArrowRight') ? 0.6 : keys.has('ArrowLeft') ? -0.6 : 0;
       pl.steer = Math.sign(pl.lean);
-      pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, vx: 0, vy: 0, seen: true, t: performance.now() };
-      if (keys.has('d') || e.key === 'd') pl.hands[1] = { x: 0.5, y: keys.has('d') ? 0.8 : -0.5, vx: 0, vy: 0, seen: true, t: performance.now() };
+      pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
+      if (keys.has('d') || e.key === 'd') pl.hands[1] = { x: 0.5, y: keys.has('d') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
     }
   };
   addEventListener('keydown', body);
@@ -486,7 +542,7 @@ function startSim() {
       const was = pl.hands[1];
       pl.energy += Math.hypot(x - was.x, y - was.y);
       pl.present = true;
-      pl.hands[1] = { x, y, vx: (x - was.x) / dt, vy: (y - was.y) / dt, seen: true, t: now };
+      pl.hands[1] = { x, y, vx: (x - was.x) / dt, vy: (y - was.y) / dt, ax: 0, ay: 0, seen: true, t: now };
     }
   });
   setInterval(() => { // a mouse at rest sends no events, so its last velocity would stick
