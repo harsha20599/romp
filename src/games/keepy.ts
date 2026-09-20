@@ -46,7 +46,7 @@ export default function keepy({ n, stage, mode, best, onEnd, hud, scene }: Game)
   return (rawDt: number) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null || g.over) return;
-    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update(dt, balloons.filter((q) => q.on).sort((a, c) => Math.abs(a.x - b.at.x) - a.y * 0.3 - (Math.abs(c.x - b.at.x) - c.y * 0.3))[0]).map((pad) => ({ ...pad, p })));
+    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update().map((pad) => ({ ...pad, p })));
     const progress = isFinite(ROUND) ? Math.max(0, t) / ROUND : Math.min(0.8, t / 120), finale = isFinite(ROUND) && t > ROUND - FINALE;
 
     if (t >= 0 && !finale) {

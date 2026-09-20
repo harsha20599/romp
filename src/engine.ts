@@ -7,7 +7,7 @@ import {
   ContainerHandler, TextureHandler, Entity, Color, Mesh, MeshInstance, StandardMaterial, ShaderMaterial, VertexBuffer, VertexFormat, CameraFrame,
   SphereGeometry, BoxGeometry, CylinderGeometry, ConeGeometry, CapsuleGeometry, TorusGeometry, BoundingBox, Mat4, Vec3, Quat,
   FILLMODE_NONE, RESOLUTION_AUTO, PROJECTION_ORTHOGRAPHIC, PROJECTION_PERSPECTIVE, GAMMA_SRGB, TONEMAP_LINEAR, FOG_LINEAR, FOG_NONE,
-  BLEND_NORMAL, CULLFACE_NONE, SEMANTIC_POSITION, SEMANTIC_ATTR12, SEMANTIC_ATTR13, TYPE_FLOAT32, BUFFER_DYNAMIC, SHADERLANGUAGE_GLSL, CHUNKAPI_2_8,
+  BLEND_NORMAL, CULLFACE_NONE, CULLFACE_FRONT, SEMANTIC_POSITION, SEMANTIC_ATTR12, SEMANTIC_ATTR13, TYPE_FLOAT32, BUFFER_DYNAMIC, SHADERLANGUAGE_GLSL, CHUNKAPI_2_8,
   Texture, PIXELFORMAT_RGBA8, FILTER_LINEAR, ADDRESS_CLAMP_TO_EDGE, BLEND_ADDITIVEALPHA, SEMANTIC_TEXCOORD0,
   type Asset, type Geometry, type Material, type ContainerResource, type GraphNode,
 } from 'playcanvas';
@@ -121,8 +121,8 @@ export const shapes = {
     return meshOf(p, nrm, idx);
   },
   // A splat: a circle whose edge wanders, so a wall of them does not look stamped.
-  blob: (r: number, points = 36) => {
-    const p = [0, 0, 0], nrm = [0, 0, 1], idx: number[] = [], edge = Array.from({ length: points }, (_, k) => { const a = (k / points) * Math.PI * 2; return r * (0.74 + 0.13 * Math.sin(3 * a + 1) + 0.08 * Math.sin(5 * a + 2.3) + 0.05 * Math.sin(9 * a)); });
+  blob: (r: number, points = 40) => {
+    const p = [0, 0, 0], nrm = [0, 0, 1], idx: number[] = [], edge = Array.from({ length: points }, (_, k) => { const a = (k / points) * Math.PI * 2; return r * (0.84 + 0.10 * Math.sin(3 * a + 1) + 0.06 * Math.sin(5 * a + 2.3)); });
     for (let k = 0; k <= points; k++) { const a = (k / points) * Math.PI * 2, e = edge[k % points]; p.push(Math.cos(a) * e, Math.sin(a) * e, 0); nrm.push(0, 0, 1); if (k) idx.push(0, k, k + 1); }
     return meshOf(p, nrm, idx);
   },
@@ -187,19 +187,33 @@ export async function fitted(url: string, size: number, floor = false) {
 }
 export const instantiate = async (url: string) => { const asset = await glb(url); return { entity: quiet((asset.resource as ContainerResource).instantiateRenderEntity()), asset }; };
 
-// Give every mesh under `e` its own copy of its material that can be cut by a plane: setClip(e, nx, ny, nz, w) keeps
-// the side where n·p + w > 0. Used by Slice, where each half of a fruit is the whole fruit minus the other side.
-export function clippable(e: Entity) {
-  for (const mi of instancesOf(e)) {
-    const m = own(mi.material.clone()) as StandardMaterial, chunks = m.getShaderChunks(SHADERLANGUAGE_GLSL);
-    m.shaderChunksVersion = CHUNKAPI_2_8;
-    chunks.set('litUserDeclarationPS', 'uniform vec4 uClip;');
-    chunks.set('litUserMainStartPS', 'if (dot(vPositionW, uClip.xyz) + uClip.w < 0.0) discard;');
-    m.cull = CULLFACE_NONE;
-    m.update();
-    mi.material = m;
-    mi.setParameter('uClip', [0, 0, 0, 1]);
+// Make everything under `e` cuttable by a plane: setClip(e, nx, ny, nz, w) keeps the side where n·p + w > 0.
+// A cut model is hollow, so each mesh is drawn twice: its outside as it was, and its inside — the back faces, which
+// is what you see when you look into the cut — flat in `flesh`. That fills the cut with exactly the fruit's own
+// outline, whatever its shape and however it tumbles; no separate cap to size, place or z-fight.
+const CLIP = ['uniform vec4 uClip;', 'if (dot(vPositionW, uClip.xyz) + uClip.w < 0.0) discard;'];
+export function clippable(e: Entity, flesh: string) {
+  const inside = own(new StandardMaterial());
+  inside.useLighting = false; inside.useSkybox = false; inside.diffuse = color('#000000'); inside.emissive = color(flesh); inside.cull = CULLFACE_FRONT;
+  for (const m of [inside]) { m.shaderChunksVersion = CHUNKAPI_2_8; m.getShaderChunks(SHADERLANGUAGE_GLSL).set('litUserDeclarationPS', CLIP[0]); m.getShaderChunks(SHADERLANGUAGE_GLSL).set('litUserMainStartPS', CLIP[1]); m.update(); }
+  for (const render of [...(e.findComponents('render') as unknown as { meshInstances: MeshInstance[] }[])]) {
+    const lining: MeshInstance[] = [];
+    for (const mi of render.meshInstances) {
+      const m = own(mi.material.clone()) as StandardMaterial, chunks = m.getShaderChunks(SHADERLANGUAGE_GLSL);
+      m.shaderChunksVersion = CHUNKAPI_2_8;
+      chunks.set('litUserDeclarationPS', CLIP[0]); chunks.set('litUserMainStartPS', CLIP[1]);
+      m.update();
+      mi.material = m;
+      const back = new MeshInstance(mi.mesh, inside, mi.node);
+      back.castShadow = false;
+      lining.push(back);
+    }
+    // (A render component destroys its old mesh instances when given a new list, so the linings get a component of their own.)
+    const liner = new Entity('lining');
+    liner.addComponent('render', { meshInstances: lining, castShadows: false, receiveShadows: false });
+    e.addChild(liner);
   }
+  for (const mi of instancesOf(e)) mi.setParameter('uClip', [0, 0, 0, 1]);
 }
 const clip = new Float32Array(4);
 export function setClip(e: Entity, nx: number, ny: number, nz: number, w: number) {
@@ -258,7 +272,7 @@ export function refreshCutouts() { // call once a frame, by whoever shows cut-ou
   cutTex().setSource(cutout.bitmap as unknown as HTMLCanvasElement);
   return cutout.slots;
 }
-export function cutoutLook(hex: string, shadow: boolean) {
+export function cutoutLook(hex: string) {
   const m = new ShaderMaterial({
     uniqueName: 'romp-cutout',
     attributes: { vertex_position: SEMANTIC_POSITION },
@@ -291,9 +305,63 @@ export function cutoutLook(hex: string, shadow: boolean) {
       }`,
   });
   m.blendType = BLEND_NORMAL; m.cull = CULLFACE_NONE; m.depthWrite = false;
-  m.setParameter('uCut', cutTex()); m.setParameter('uTint', linear(hex)); m.setParameter('uShadow', shadow ? 1 : 0); m.setParameter('uTime', 0);
+  m.setParameter('uCut', cutTex()); m.setParameter('uTint', linear(hex)); m.setParameter('uShadow', 0); m.setParameter('uTime', 0);
   m.setParameter('uSize', [CUT.left * 2, CUT.up + CUT.down]); m.setParameter('uSlot', [0, 1, 0, 0]);
   m.update();
+  return own(m);
+}
+
+// ---- the shadow body -------------------------------------------------------------------------------------------------
+// The player as a figure of light printed in halftone dots: a smooth body grown around the skeleton (every limb a
+// rounded, tapering capsule, all melted together), its edge glowing in the player's colour, and the parts that play —
+// hand tips and foot tips — burning white. Drawn entirely in one fragment shader from 17 joint positions, so it
+// costs the tracker nothing (no person mask), looks the same on every device, and cannot have a ragged edge.
+// uTips = 1 draws only the glowing tips (over a camera cut-out, or over the room in the Mirror look).
+export const BODY_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 31, 32, 19, 20]; // nose, shoulders, elbows, wrists, hips, knees, ankles, toes, index knuckles
+export function bodyLook(hex: string) {
+  const m = new ShaderMaterial({
+    uniqueName: 'romp-body',
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vAt;
+      void main(void) { vAt = vertex_position.xy; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec2 vAt; uniform vec3 uTint; uniform float uTime; uniform float uTips; uniform float uJ[34]; uniform float uSeen[17];
+      vec2 J(int i) { return vec2(uJ[i * 2], uJ[i * 2 + 1]); }
+      float limb(vec2 p, int ia, int ib, float ra, float rb) { // distance to a capsule that tapers from ra to rb; far away if either end is unseen
+        vec2 a = J(ia), b = J(ib), ab = b - a; float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0);
+        return length(p - a - ab * h) - mix(ra, rb, h) + (1.0 - step(0.4, min(uSeen[ia], uSeen[ib]))) * 9.0;
+      }
+      float melt(float a, float b) { float k = 0.16, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+      void main(void) {
+        vec2 p = vAt, neck = (J(1) + J(2)) * 0.5, hips = (J(7) + J(8)) * 0.5, head = J(0) + vec2(0.0, 0.06);
+        float tips = 0.0; // the parts that play
+        for (int i = 0; i < 2; i++) { tips += exp(-length(p - mix(J(5 + i), J(15 + i), 0.6)) * 5.5) * step(0.4, uSeen[5 + i]); tips += exp(-length(p - mix(J(11 + i), J(13 + i), 0.6)) * 5.5) * step(0.4, uSeen[11 + i]); }
+        tips *= 0.85 + 0.15 * sin(uTime * 6.0);
+        if (uTips > 0.5) { gl_FragColor = vec4(gammaCorrectOutput(mix(uTint * 1.5, vec3(1.0), smoothstep(0.25, 0.9, tips))), min(1.0, tips * 1.1)); return; }
+        float d = length(p - head) - 0.43;
+        d = melt(d, length(p - mix(neck, head, 0.5)) - 0.16);
+        { vec2 ab = hips - neck; float h = clamp(dot(p - neck, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0); d = melt(d, length(p - neck - ab * h) - mix(0.50, 0.40, h)); } // torso
+        d = melt(d, limb(p, 1, 2, 0.22, 0.22)); d = melt(d, limb(p, 7, 8, 0.26, 0.26));
+        d = melt(d, limb(p, 1, 3, 0.19, 0.15)); d = melt(d, limb(p, 3, 5, 0.15, 0.11)); d = melt(d, limb(p, 5, 15, 0.12, 0.13));
+        d = melt(d, limb(p, 2, 4, 0.19, 0.15)); d = melt(d, limb(p, 4, 6, 0.15, 0.11)); d = melt(d, limb(p, 6, 16, 0.12, 0.13));
+        d = melt(d, limb(p, 7, 9, 0.27, 0.19)); d = melt(d, limb(p, 9, 11, 0.18, 0.12)); d = melt(d, limb(p, 11, 13, 0.13, 0.11));
+        d = melt(d, limb(p, 8, 10, 0.27, 0.19)); d = melt(d, limb(p, 10, 12, 0.18, 0.12)); d = melt(d, limb(p, 12, 14, 0.13, 0.11));
+        float body = smoothstep(0.02, -0.02, d), line = smoothstep(0.10, 0.06, abs(d - 0.03)), glow = exp(-max(d, 0.0) * 4.2) * 0.55;
+        // Halftone: a grid of dots, fatter toward the head as if lit from above, and fatter again just inside the edge (a rim).
+        vec2 cell = fract(p * 9.5) - 0.5; float up = clamp((p.y + 4.2) / 6.6, 0.0, 1.0), rim = smoothstep(-0.30, -0.02, d);
+        float size = 0.26 + 0.16 * up + 0.10 * rim, dots = smoothstep(size, size - 0.10, length(cell));
+        float sheen = smoothstep(0.0, 0.08, sin((p.x + p.y) * 1.4 - uTime * 1.6) - 0.93);
+        vec3 fill = uTint * (0.20 + 0.18 * up) + (uTint * (0.75 + 0.45 * up) + vec3(0.30) * (rim * 0.6 + sheen)) * dots;
+        vec3 rgb = mix(uTint * 1.25 + vec3(0.18), fill, body) + vec3(1.0) * tips * 0.9 + uTint * tips * 0.5;
+        float alpha = max(max(body * 0.96, line * 0.95), max(glow, min(1.0, tips)));
+        gl_FragColor = vec4(gammaCorrectOutput(rgb), alpha);
+      }`,
+  });
+  m.blendType = BLEND_NORMAL; m.cull = CULLFACE_NONE; m.depthWrite = false;
+  m.setParameter('uTint', linear(hex)); m.setParameter('uTime', 0); m.setParameter('uTips', 0);
+  m.setParameter('uJ[0]', new Float32Array(34)); m.setParameter('uSeen[0]', new Float32Array(17));
+  m.update();
+  timed.push(m);
   return own(m);
 }
 
@@ -453,7 +521,6 @@ export function backdrop(scene: Scene, place: Place, bodies = false) {
   }));
   m.setParameter('uTime', 0); m.update();
   timed.push(m);
-  scene.cleanup(() => void timed.splice(timed.indexOf(m), 1));
   return node(scene.root, shapes.quad(W, H), m, [0, 0, -20]);
 }
 
@@ -561,6 +628,7 @@ export function run(tick: Tick) {
 export function end() {
   if (!live) return;
   for (const fn of live.cleanups) fn();
+  timed.length = 0;
   live.frame?.destroy();
   live.root.destroy();
   for (const thing of owned) thing.destroy();

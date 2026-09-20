@@ -14,9 +14,9 @@ import { H, PLAYER_COLORS, bestLine, bursts as makeBursts, comboText, divider, h
 const R = 0.75, GRAVITY = -9, FRENZY = 10, FINALE = 4.5, DEG = 180 / Math.PI;
 const SLICE_SPEED = 5, CRIT_SPEED = 12.5; // stage units/s a hand must move to cut, and to cut hard — tune on device
 const FRUIT = [
-  { url: 'apple', flesh: '#fef9c3', cap: 0.62, size: 2 }, { url: 'orange', flesh: '#fdba74', cap: 0.66, size: 2 }, { url: 'watermelon', flesh: '#fb7185', cap: 0.5, size: 2.6 },
-  { url: 'pear', flesh: '#fef08a', cap: 0.5, size: 2.2 }, { url: 'lemon', flesh: '#fef9c3', cap: 0.52, size: 1.8 }, { url: 'coconut', flesh: '#fafafa', cap: 0.62, size: 2 },
-  { url: 'pineapple', flesh: '#fde047', cap: 0.4, size: 2.8 }, { url: 'strawberry', flesh: '#fda4af', cap: 0.45, size: 1.7 },
+  { url: 'apple', flesh: '#fef9c3', size: 2 }, { url: 'orange', flesh: '#fdba74', size: 2 }, { url: 'watermelon', flesh: '#fb7185', size: 2.6 },
+  { url: 'pear', flesh: '#fef08a', size: 2.2 }, { url: 'lemon', flesh: '#fef9c3', size: 1.8 }, { url: 'coconut', flesh: '#fafafa', size: 2 },
+  { url: 'pineapple', flesh: '#fde047', size: 2.8 }, { url: 'strawberry', flesh: '#fda4af', size: 1.7 },
 ];
 const RULES = {
   '': { length: 60, lives: 0, bombs: true, powers: true, finale: true, gravity: 1, music: 'arcade' },
@@ -29,7 +29,7 @@ type Power = keyof typeof POWERS;
 const v = new Vec3(), q = new Quat(), turn = new Quat();
 
 type Kind = 'fruit' | 'star' | 'bomb' | 'power';
-type Half = { obj: Entity; cap: Entity; nx: number; ny: number; x: number; y: number; vx: number; vy: number };
+type Half = { obj: Entity; nx: number; ny: number; x: number; y: number; vx: number; vy: number };
 type Piece = {
   state: 'off' | 'wait' | 'whole' | 'cut'; kind: Kind; flesh: string; power: Power; zone: number; wait: number; x: number; y: number; vx: number; vy: number; spin: number; age: number; rx: number; ry: number;
   whole: Entity; halo: Entity | null; halves: Half[]; along: Vec3; base: Quat;
@@ -72,7 +72,7 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
       stains.paint(i, hex);
     }
   };
-  const capMesh = shapes.circle(1, 24), capLook = flat('#ffffff', { twoSided: true }), haloMesh = shapes.ring(1.05, 1.3, 40), haloLook = flat('#ffffff', { opacity: 0.85 });
+  const haloMesh = shapes.ring(1.05, 1.3, 40), haloLook = flat('#ffffff', { opacity: 0.85 });
   const add = (e: Entity) => { scene.root.addChild(e); e.enabled = false; return e; };
 
   const pieces: Piece[] = Array.from({ length: n === 2 ? 42 : 28 }, (_, i) => { // enough fruit for two fountains and a fan to be in the air at once
@@ -82,13 +82,9 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
     if (halo) halo.enabled = false;
     // Each half is the whole model again, with its own material clipped by its own plane.
     const halves = kind !== 'fruit' ? [] : [0, 1].map(() => {
-      const obj = add(fruit[type].clone() as Entity), cap = node(scene.root, capMesh, capLook);
-      clippable(obj);
-      tint(cap, FRUIT[type].flesh);
-      const face = R * FRUIT[type].size * 0.45 * Math.min(1, FRUIT[type].cap / 0.66); // the cut face is as wide as the fruit is thick there
-      cap.setLocalScale(face, face, 1);
-      cap.enabled = false;
-      return { obj, cap, nx: 0, ny: 0, x: 0, y: 0, vx: 0, vy: 0 };
+      const obj = add(fruit[type].clone() as Entity);
+      clippable(obj, FRUIT[type].flesh);
+      return { obj, nx: 0, ny: 0, x: 0, y: 0, vx: 0, vy: 0 };
     });
     return { state: 'off', kind, flesh: FRUIT[type].flesh, power: 'frenzy', zone: 0, wait: 0, x: 0, y: 0, vx: 0, vy: 0, spin: 0, age: 0, rx: 0, ry: 0, whole, halo, halves, along: new Vec3(), base: new Quat() };
   });
@@ -215,8 +211,10 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
       award(p, points);
       g.cut[p]++; g.bestCombo[p] = Math.max(g.bestCombo[p], g.combo[p]); g.assist[p] = Math.max(0, g.assist[p] - 0.04);
       hitSound(pc.kind === 'star' ? 'powerUp' : crit ? 'impactPunch_heavy' : 'impactSoft_heavy', g.combo[p], crit ? 0.9 : 0.7);
-      if (crit) { g.crits[p]++; hud.pop(pc.x, pc.y + 0.5, 'Critical!', '#fb923c'); hitStop(60); hud.shake(0.35); }
-      else if (pc.kind === 'star' || g.combo[p] % 5 === 0) hitStop(pc.kind === 'star' ? 80 : 50); // the blade bites
+      // (No hit-stop on ordinary cuts or criticals: a fast player lands several a second, and the game stuttered.
+      // The clock only catches its breath for the rare things — a star, a power-up, a bomb, the melon going off.)
+      if (crit) { g.crits[p]++; hud.pop(pc.x, pc.y + 0.5, 'Critical!', '#fb923c'); }
+      if (pc.kind === 'star') hitStop(70);
       // One swing, several fruit: the chain stays open for a moment after each cut and pays when it closes.
       const chain = g.chain[i];
       chain.n = t < chain.until ? chain.n + 1 : 1; chain.until = t + 0.28; chain.x = pc.x; chain.y = pc.y;
@@ -276,17 +274,13 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
       const open = Math.min(1.25, pc.age * 3.2), cos = Math.cos(open), sin = Math.sin(open);
       pc.halves.forEach((half, k) => {
         const on = pc.state === 'cut';
-        show(half.obj, on); show(half.cap, on);
+        show(half.obj, on);
         if (!on) return;
         half.vy += grav * dt; half.x += half.vx * dt; half.y += half.vy * dt;
         half.obj.setLocalPosition(half.x, half.y, 0);
         half.obj.setLocalRotation(q.copy(turn.setFromAxisAngle(pc.along, (k ? open : -open) * DEG)).mul(pc.base));
         v.set(half.nx * cos, half.ny * cos, -sin); // the plane's normal, swung with the half
         setClip(half.obj, v.x, v.y, v.z, -(v.x * half.x + v.y * half.y));
-        half.cap.setLocalPosition(half.x + v.x * 0.01, half.y + v.y * 0.01, v.z * 0.01);
-        // Turn the cap (which faces +z) to face back along the normal: the shortest rotation from +z to -v.
-        const w = 1 - v.z;
-        half.cap.setLocalRotation(w < 1e-6 ? q.set(1, 0, 0, 0) : q.set(v.y, -v.x, 0, w).normalize());
       });
     }
     wet.forEach((w, i) => { if (w.life > 0) w.life -= real / 6; stains.place(i, w.x, w.y - (1 - w.life) * 0.25, -19, w.size); stains.fade(i, Math.max(0, Math.min(0.5, w.life * 0.9))); }); // they run a little as they dry

@@ -232,7 +232,7 @@ function TrackerDetail() {
   const [, tick] = useState(0);
   useEffect(() => { const id = setInterval(() => tick((v) => v + 1), 500); return () => clearInterval(id); }, []);
   const blind = performance.now() - grip.seenAt > 1500;
-  return <>camera {track.camFps.toFixed(0)} fps · frames {track.frames === 'direct' ? 'direct' : `copied ${track.grabMs.toFixed(0)} ms`} · model {track.modelMs.toFixed(0)} ms · hand: {blind ? 'not found' : `${grip.closed ? 'FIST' : 'open'} (curl ${grip.curl.toFixed(2)})`}</>;
+  return <>camera {track.camFps.toFixed(0)} fps · frames {track.frames === 'direct' ? 'direct' : `copied ${track.grabMs.toFixed(0)} ms`} · model {track.modelMs.toFixed(0)} ms{track.fps2 > 0.5 ? ` · player two's tracker (${track.partner}) ${track.fps2.toFixed(0)} fps, ${track.model2.toFixed(0)} ms` : ''} · hand: {blind ? 'not found' : `${grip.closed ? 'FIST' : 'open'} (curl ${grip.curl.toFixed(2)})`}</>;
 }
 
 function App() {
@@ -514,12 +514,11 @@ function App() {
             <div className="row">
               <span className="label">Your look</span>
               <div className="seg">
-                <button aria-pressed={tuning.look === 'camera'} onClick={() => setTracker('romp.look', 'camera')}>Camera</button>
                 <button aria-pressed={tuning.look === 'shadow'} onClick={() => setTracker('romp.look', 'shadow')}>Shadow</button>
+                <button aria-pressed={tuning.look === 'camera'} onClick={() => setTracker('romp.look', 'camera')}>Camera</button>
                 <button aria-pressed={tuning.look === 'mirror'} onClick={() => setTracker('romp.look', 'mirror')}>Mirror</button>
-                <button aria-pressed={tuning.look === 'avatar'} onClick={() => setTracker('romp.look', 'avatar')}>Character</button>
               </div>
-              <span className="dim">In full-body games. Camera: your own picture lifted out of the room. Shadow: the same shape in glowing dots. Mirror: the game played over your whole room, dimmed, with you in the light. Character: a drawn figure. Camera and Shadow cost the tracker some speed — if it cannot keep up it switches to the character by itself.</span>
+              <span className="dim">In full-body games. Shadow: you as a figure of light, hands and feet glowing — free, and the same for two players. Camera: your own picture lifted out of the room (one player; costs the tracker speed, and switches back to Shadow by itself if it cannot keep up). Mirror: the game played over your whole room, dimmed, with you in the light.</span>
             </div>
             <div className="row">
               <span className="label">Model</span>

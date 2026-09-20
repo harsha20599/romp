@@ -4,7 +4,7 @@ import type { Entity, GraphNode } from 'playcanvas';
 import { cutout, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
 import { CUT } from './cut.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
-import { H, W, cutoutLook, feedUnit, flat, glowLook, instanced, node, mirrorOn, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
+import { BODY_JOINTS, H, W, bodyLook, cutoutLook, feedUnit, flat, glowLook, instanced, node, mirrorOn, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
 export { audio, blip, jingle, music, say, sfx, whoosh } from './audio.ts';
 export { H, W, hitStop } from './engine.ts';
 export { PLAYER_COLORS } from './pace.ts';
@@ -184,81 +184,48 @@ export function segDist(px: number, py: number, ax: number, ay: number, bx: numb
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
 
-// The player's whole body on the stage, for games played with more than hands. Two looks, one interface:
-//  · their own picture, lifted out of the room and lit in their colour (or the same shape as a glowing shadow) —
-//    drawn from the tracker's person mask, so it is only there on devices and routes that can make one;
-//  · a drawn character built on the skeleton — round limbs with an outline, gloves, shoes, a face that looks where
-//    the action is and puffs when you work. It needs nothing but the landmarks, so it is also what ?sim shows.
-// Either way the "pads" — the parts that can touch things (hands, head, elbows, knees, feet), in stage units — come
-// from the same rig, so a game never knows which look is on. `at` is where the middle of the shoulders sits;
-// `scale` is stage units per shoulder-width (1.2 fits a standing adult, arms up, into the 9-unit-high stage).
-const BONES: [number, number, number][] = [[11, 13, 0.15], [13, 15, 0.13], [12, 14, 0.15], [14, 16, 0.13], [23, 25, 0.19], [25, 27, 0.16], [24, 26, 0.19], [26, 28, 0.16]];
+// The player's whole body on the stage, for games played with more than hands. One interface, three looks:
+//  · Shadow (the default): a figure of light in halftone dots, grown around the skeleton in a shader — no person mask,
+//    so it costs the tracker nothing, works for two players, and is what ?sim shows;
+//  · Camera: the player's own picture lifted out of the room (one player only: it needs the model's person mask);
+//  · Mirror: nothing drawn at all — the player is already in the picture behind the game — and `at` follows them.
+// In every look the parts that play — hand tips and foot tips — glow, and the "pads" (hands, head, elbows, knees,
+// feet, in stage units) come from the same rig, so a game never knows which look is on. `at` is where the middle of
+// the shoulders sits; `scale` is stage units per shoulder-width (1.2 fits a standing adult, arms up, into the stage).
 export type Pad = { part: 'hand' | 'head' | 'elbow' | 'knee' | 'foot'; side: number; x: number; y: number; vx: number; vy: number; seen: boolean };
 const PADS: [Pad['part'], number, number[]][] = [['hand', 0, [15, 19]], ['hand', 1, [16, 20]], ['head', 0, [0]], ['elbow', 0, [13]], ['elbow', 1, [14]], ['knee', 0, [25]], ['knee', 1, [26]], ['foot', 0, [27, 31]], ['foot', 1, [28, 32]]];
-const INK = '#1b1240', DEG = 180 / Math.PI;
 export function figure(scene: Scene, p: number, at: { x: number; y: number; scale: number }) {
-  const hex = PLAYER_COLORS[p], k = at.scale, group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
-  // Under the Mirror look nothing is drawn here at all — the player is already in the picture — and `at` follows
-  // them around the room instead: wherever they stand, that is where their game is.
-  const inRoom = mirrorOn();
+  const hex = PLAYER_COLORS[p], group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
   const pads: Pad[] = PADS.map(([part, side]) => ({ part, side, x: 0, y: 0, vx: 0, vy: 0, seen: false }));
-
-  // ---- their own picture ----
-  const wantsPicture = (tuning.look === 'camera' || tuning.look === 'shadow') && !sim, look = wantsPicture ? cutoutLook(hex, tuning.look === 'shadow') : null;
-  const picture = look ? node(group, shapes.quad(CUT.left * 2, CUT.up + CUT.down), look, [0, ((CUT.up - CUT.down) / 2) * k, 0]) : null;
-  picture?.setLocalScale(k, k, 1);
+  const inRoom = mirrorOn(), wantsPicture = tuning.look === 'camera' && !sim && !inRoom;
+  const window_ = shapes.quad(CUT.left * 2 + 1, CUT.up + CUT.down + 1), lift = (CUT.up - CUT.down) / 2;
+  const cut = wantsPicture ? cutoutLook(hex) : null, picture = cut ? node(group, shapes.quad(CUT.left * 2, CUT.up + CUT.down), cut, [0, lift, 0]) : null;
   if (wantsPicture) { wantCutout(true); scene.cleanup(() => wantCutout(false)); }
-  const ground = node(group, shapes.circle(1, 24), flat('#000000', { opacity: 0.3 }), [0, -3.95 * k, -0.2]); // a soft footing under whoever it is
-  ground.setLocalScale(1.5 * k, 0.2 * k, 1);
+  const look = bodyLook(hex), body = node(group, window_, look, [0, lift, 0.05]);
+  const ground = node(group, shapes.circle(1, 24), flat('#000000', { opacity: 0.3 }), [0, -3.95, -0.2]); // a soft footing under whoever it is
+  ground.setLocalScale(1.5, 0.2, 1);
+  const joints = new Float32Array(34), seen = new Float32Array(17);
 
-  // ---- the drawn character ----
-  const puppet = node(group), ink = flat(INK), skin = flat(hex), white = flat('#ffffff'), dark = flat('#0f0a2a');
-  const limb = (r: number, z: number) => { const e = node(puppet, shapes.limb(r * k), skin, [0, 0, z]); node(e, shapes.limb((r + 0.05) * k), ink, [0, 0, -0.02]); return e; };
-  const round = (r: number, mat = skin, z = 0.04) => { const e = node(puppet, shapes.circle(r * k, 24), mat, [0, 0, z]); node(e, shapes.circle((r + 0.05) * k, 24), ink, [0, 0, -0.02]); return e; };
-  const torso = limb(0.44, 0), bones = BONES.map(([, , r]) => limb(r, 0.02)), head = round(0.5, skin, 0.06);
-  const mitts = [0, 1].map(() => round(0.22, white, 0.08)), shoes = [0, 1].map(() => round(0.2, white, 0.03));
-  const eyes = [-1, 1].map((side) => { const e = node(head, shapes.circle(0.13 * k, 16), white, [side * 0.18 * k, 0.06 * k, 0.02]); return { e, pupil: node(e, shapes.circle(0.065 * k, 12), dark, [0, 0, 0.01]) }; });
-  const mouth = node(head, shapes.circle(0.09 * k, 14), dark, [0, -0.2 * k, 0.02]);
-  const face = { blink: 2, puff: 0, lx: 0, ly: 0 };
-  const place = (e: Entity, A: number[], B: number[]) => { e.setLocalPosition(A[0] * k, A[1] * k, e.getLocalPosition().z); e.setLocalEulerAngles(0, 0, Math.atan2(B[1] - A[1], B[0] - A[0]) * DEG); e.setLocalScale(Math.max(0.01, Math.hypot(B[0] - A[0], B[1] - A[1]) * k), 1, 1); };
-
-  // `lookAt`: the stage point the character's eyes should follow (the nearest balloon, the newest crack).
-  const update = (dt = 1 / 60, lookAt?: { x: number; y: number }) => {
+  const update = () => {
     const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33;
-    if (inRoom && on) {
-      const f = pl.frame, unit = feedUnit(f.aspect);
-      at.x = (f.x - f.aspect / 2) * unit; at.y = (0.5 - f.y) * unit; at.scale = f.sw * unit;
-    }
-    if (!show(group, on && !inRoom)) {
-      for (const pad of pads) pad.seen = false;
-      if (!on) return pads;
-    }
-    const drawn = !inRoom && !(picture && tuning.look !== 'avatar' && refreshCutouts() > p); // (the look can fall back to the character mid-round: see pose.ts)
-    if (picture) { show(picture, !drawn); look!.setParameter('uSlot', [p, 1 / Math.max(1, cutout.slots), 0, 0]); look!.setParameter('uTime', performance.now() / 1000); }
-    if (show(puppet, drawn)) {
-      const mid = (a: number, b: number) => [(rig[a][0] + rig[b][0]) / 2, (rig[a][1] + rig[b][1]) / 2];
-      place(torso, mid(11, 12), mid(23, 24));
-      BONES.forEach(([a, b], i) => { if (show(bones[i], rig[a][2] > 0.4 && rig[b][2] > 0.4)) place(bones[i], rig[a], rig[b]); });
-      head.setLocalPosition(rig[0][0] * k, (rig[0][1] + 0.08) * k, 0.06);
-      [15, 16].forEach((j, h) => { if (show(mitts[h], rig[j][2] > 0.4)) mitts[h].setLocalPosition((rig[j][0] * 0.4 + rig[j + 4][0] * 0.6) * k, (rig[j][1] * 0.4 + rig[j + 4][1] * 0.6) * k, 0.08); });
-      [27, 28].forEach((j, h) => { if (show(shoes[h], rig[j][2] > 0.4)) { shoes[h].setLocalPosition((rig[j][0] + rig[j + 4][0]) * 0.5 * k, (rig[j][1] + rig[j + 4][1]) * 0.5 * k - 0.04 * k, 0.03); shoes[h].setLocalScale(1.35, 0.8, 1); } });
-      // The face: eyes follow the action, blink now and then; the mouth opens with effort.
-      const tx = lookAt ? lookAt.x - (at.x + rig[0][0] * k) : 0, ty = lookAt ? lookAt.y - (at.y + rig[0][1] * k) : 0, far = Math.hypot(tx, ty) || 1;
-      face.lx += ((tx / far) * 0.05 * k - face.lx) * Math.min(1, dt * 10); face.ly += ((ty / far) * 0.05 * k - face.ly) * Math.min(1, dt * 10);
-      face.blink -= dt; if (face.blink < -0.12) face.blink = 2 + Math.random() * 3;
-      const speed = Math.hypot(rig[15][3], rig[15][4]) + Math.hypot(rig[16][3], rig[16][4]) + Math.hypot(rig[27][3], rig[27][4]) + Math.hypot(rig[28][3], rig[28][4]);
-      face.puff += (Math.min(1, speed / 9) - face.puff) * Math.min(1, dt * 5);
-      for (const eye of eyes) { eye.e.setLocalScale(1, face.blink < 0 ? 0.12 : 1, 1); eye.pupil.setLocalPosition(face.lx, face.ly, 0.01); }
-      mouth.setLocalScale(1 + face.puff * 0.6, 0.45 + face.puff * 1.3, 1);
-    }
-    PADS.forEach(([, , joints], i) => {
+    if (!show(group, on)) { for (const pad of pads) pad.seen = false; return pads; }
+    if (inRoom) { const f = pl.frame, unit = feedUnit(f.aspect); at.x = (f.x - f.aspect / 2) * unit; at.y = (0.5 - f.y) * unit; at.scale = f.sw * unit; }
+    group.setLocalPosition(at.x, at.y, 0.6); group.setLocalScale(at.scale, at.scale, 1); // everything inside is in shoulder-widths
+    // The picture, if there is one to show this frame (one player, mask arriving); otherwise the shadow body.
+    const pictured = !!picture && tuning.look === 'camera' && cutout.slots === 1 && refreshCutouts() > 0;
+    if (picture && show(picture, pictured)) { cut!.setParameter('uSlot', [0, 1, 0, 0]); cut!.setParameter('uTime', performance.now() / 1000); }
+    show(ground, !inRoom);
+    BODY_JOINTS.forEach((j, i) => { joints[i * 2] = rig[j][0]; joints[i * 2 + 1] = rig[j][1] - lift; seen[i] = rig[j][2]; });
+    look.setParameter('uJ[0]', joints); look.setParameter('uSeen[0]', seen); look.setParameter('uTips', pictured || inRoom ? 1 : 0);
+    PADS.forEach(([, , js], i) => {
       const pad = pads[i];
       let x = 0, y = 0, vx = 0, vy = 0, vis = 1;
-      for (const j of joints) { x += rig[j][0]; y += rig[j][1]; vx += rig[j][3]; vy += rig[j][4]; vis = Math.min(vis, rig[j][2]); }
-      const c = at.scale / joints.length;
+      for (const j of js) { x += rig[j][0]; y += rig[j][1]; vx += rig[j][3]; vy += rig[j][4]; vis = Math.min(vis, rig[j][2]); }
+      const c = at.scale / js.length;
       Object.assign(pad, { x: at.x + x * c, y: at.y + y * c, vx: vx * c, vy: vy * c, seen: vis > 0.45 });
     });
     return pads;
   };
+  void body;
   return { update, pads, at };
 }

@@ -42,14 +42,16 @@ survive from round to round and the context is never re-created.
   variants are kept apart: `Session.variant`), `hud.banner` / `hud.pop`, `round(..., extra)` for finales and endless rounds,
   `bestLine`, result notes, and `figure()` — the player's whole body on stage with touch pads (hands, head, elbows, knees,
   feet) from `players[p].rig`. Slice is the reference for how much a game should have in it; Leaks and Keepy-Uppy for full-body play.
-- How players are shown (Tracking → "Your look"): **Camera** — the worker composes each pose frame and the model's own
-  person mask into a per-player cut-out (`compose` in pose.worker.ts, window in `src/cut.ts`), drawn by `cutoutLook` with a
-  graded picture, backlight, outline and glow; **Shadow** — the same shape in halftone dots; **Mirror** — the game over the
-  whole camera picture, dimmed and duotoned, players spotlit, and `figure().at` follows them round the room (no mask);
-  **Character** — a drawn figure on the skeleton (also the fallback, and what `?sim` shows). Masks are only computed while a
-  full-body game is on screen, and switch themselves off if the tracker drops under ~17 fps. Hand games show hands only:
-  beads of light with comet trails (`glowLook`, `trailLook`). `backdrop(scene, place)` paints each flat-stage game's world
-  in one fragment shader (dojo, sky, deep, gym, synth, disco, studio, space, tiles).
+- How players are shown in full-body games (Tracking → "Your look"): **Shadow** (default) — `bodyLook`: a halftone figure of
+  light grown around 17 skeleton joints in one fragment shader, hand and foot tips glowing; no person mask, so it is free
+  for the tracker and identical for two players. **Camera** — the worker composes each pose frame and the model's own person
+  mask into a cut-out (`compose` in pose.worker.ts, window in `src/cut.ts`), one player only, and it switches back to Shadow
+  if the tracker drops under ~17 fps. **Mirror** — the game over the whole camera picture, dimmed and duotoned, players
+  spotlit; `figure().at` follows them round the room. Hand games show hands only: beads of light with comet trails.
+  `backdrop(scene, place)` paints each flat-stage game's world in one fragment shader.
+- Two players = two trackers (pose.ts `pairUp`): the first worker keeps the GPU and takes seat 0's side of the picture, a
+  second worker runs the lite model on the CPU for seat 1, each on its own copy of the camera track, sides overlapping
+  in the middle. One model doing two people per frame measured 105 ms a frame on the Tab S7 (8 readings a second).
 - `src/physics.ts` — Rapier, fetched only by the games that use it (Goalie, Smash).
 
 The menus load ~80 KB of script (gzipped); the engine (~325 KB) and a game's code are fetched on its briefing screen.

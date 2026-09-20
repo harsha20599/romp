@@ -70,7 +70,7 @@ export const tuning = {
   direct: stored('romp.frames') !== 'copied', // stream camera frames straight into the tracker (off = copy them out of the <video>, the old route)
   // How players are shown in full-body games: 'camera' = their own picture, lifted out of the room; 'shadow' = the same
   // shape filled with their colour; 'avatar' = a drawn character from the skeleton (no mask needed: the cheapest).
-  look: (['camera', 'shadow', 'avatar', 'mirror'].includes(stored('romp.look') ?? '') ? stored('romp.look') : 'camera') as 'camera' | 'shadow' | 'avatar' | 'mirror',
+  look: (['camera', 'mirror'].includes(stored('romp.look') ?? '') ? stored('romp.look') : 'shadow') as 'camera' | 'shadow' | 'mirror',
   fastCam: stored('romp.cam') !== 'standard', // take the camera's 60fps mode when it has one, even at a smaller picture
 };
 
@@ -99,7 +99,8 @@ export function setPlayers(n: number) {
   nPlayers = n;
   players[1].present &&= n === 2;
   void landmarker?.setOptions({ numPoses: n });
-  worker?.postMessage({ type: 'players', n });
+  if (worker && track.frames === 'direct') pairUp(n === 2);
+  else worker?.postMessage({ type: 'players', n });
 }
 
 const L_SHOULDER = 11, R_SHOULDER = 12, WRISTS = [15, 16] as const;
@@ -197,15 +198,25 @@ const resetFilters = (F: ReturnType<typeof mkFilters>) =>
   [F.fx, F.fy, F.sw, F.lift, F.lean, F.steer, ...F.hands.flatMap((h) => [h.x, h.y]), ...F.rig.flat()].forEach((f) => f.reset());
 
 const prev: (NormalizedLandmark[] | null)[] = [null, null];
-let lastApply = 0;
+const lastApply = [0, 0], strangers = [0, 0]; // strangers: readings in a row that belonged to the other side
 // Each player's own standing shoulder height: learned while they stand, re-learned if they walk to a new spot.
 const stand = [{ y: NaN, x: NaN, since: 0, ratio: 0 }, { y: NaN, x: NaN, since: 0, ratio: 0 }];
 // `now` is when the frame was captured, so every reading carries its true age and speeds use true frame spacing.
-function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.now()) {
-  const slots = assignSlots(poses, aspect, nPlayers);
-  const dt = Math.min(0.2, Math.max(1e-3, (now - lastApply) / 1000));
-  lastApply = now;
+// With two players each has a tracker of their own, looking at their own side of the picture (see startWorker): a
+// reading then arrives for one `seat` at a time, in its own rhythm. With one player, one tracker sees the whole frame.
+function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.now(), seat = -1) {
+  const slots = seat < 0 ? assignSlots(poses, aspect, nPlayers) : [];
+  if (seat >= 0) {
+    // A tracker only speaks for its own side: a body whose shoulders are past the middle belongs to the other seat
+    // (screen-left is the raw picture's right-hand side: the TV is a mirror).
+    const lm = poses[0], mid = lm && seen(lm[L_SHOULDER]) && seen(lm[R_SHOULDER]) ? (lm[L_SHOULDER].x + lm[R_SHOULDER].x) / 2 : NaN;
+    slots[seat] = (seat === 0 ? mid > 0.45 : mid < 0.55) ? lm : (undefined as never);
+    strangers[seat] = lm && !slots[seat] ? strangers[seat] + 1 : 0;
+  }
   players.forEach((pl, i) => {
+    if (seat >= 0 && i !== seat) return;
+    const dt = Math.min(0.2, Math.max(1e-3, (now - lastApply[i]) / 1000));
+    lastApply[i] = now;
     const lm = slots[i], F = filters[i], st = stand[i];
     pl.present = !!lm;
     if (!lm) return void ((prev[i] = null), (st.y = st.x = NaN), (st.ratio = 0), resetFilters(F));
@@ -273,12 +284,12 @@ export const cutout = { bitmap: null as ImageBitmap | null, slots: 0, seq: 0, ms
 let cutWanted = 0;
 export function wantCutout(on: boolean) {
   cutWanted = Math.max(0, cutWanted + (on ? 1 : -1));
-  const ask = cutWanted > 0 && (tuning.look === 'camera' || tuning.look === 'shadow');
+  const ask = cutWanted > 0 && tuning.look === 'camera' && nPlayers === 1;
   if (ask !== cutout.asked) { cutout.asked = ask; worker?.postMessage({ type: 'cut', on: ask }); }
 }
 
 // camFps vs the pose fps tells you which side is the bottleneck; grab = copying the frame out, model = the tracker itself.
-export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0, frames: '' }; // frames: 'direct' (streamed to the tracker) or 'copied'
+export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0, frames: '', partner: '', fps2: 0, model2: 0 }; // partner/fps2/model2: player two's own tracker // frames: 'direct' (streamed to the tracker) or 'copied'
 
 // Fist-to-press. The pose model cannot see fingers, so while a menu wants it (`want`), the palm of the pointing hand
 // is cropped out of the frame and sent to a hand model after each pose result. Games never set `want`: zero cost in play.
@@ -384,6 +395,7 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
   });
   if (!ready) return w.terminate(), false;
   worker = w;
+  camTrack = cam;
   perf.delegate = `${ready} worker`;
   if (cutout.asked) w.postMessage({ type: 'cut', on: true });
 
@@ -410,7 +422,8 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
     if (waiting) { send(waiting); waiting = null; }
     const now = performance.now(), t = m.ts === undefined ? m.t : clock.time(m.ts, m.arrived);
     aspect = m.aspect ?? video.videoWidth / video.videoHeight;
-    apply(m.landmarks, aspect, t);
+    apply(m.landmarks, aspect, t, m.seat ?? -1);
+    if (m.seat === 0 && strangers[0] > 20) { strangers[0] = 0; w.postMessage({ type: 'relook' }); }
     if (m.luma !== undefined) lumaTap?.(t, m.luma);
     tape?.push([Math.round(t), Math.round(now - t), m.landmarks.map((lm: NormalizedLandmark[]) => lm.flatMap((q) => [+q.x.toFixed(4), +q.y.toFixed(4), +(q.visibility ?? 1).toFixed(2)]))]);
     perf.fps += (1000 / (now - last) - perf.fps) * 0.1;
@@ -419,9 +432,9 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
     // The mask is a luxury. If the tracker cannot hold ~17 frames a second with it on, for four seconds running,
     // it goes — for the rest of the session — and players are drawn as characters instead. Tracking speed is the game.
     // (Not when the look was chosen by hand on the Tracking screen: then it is the player's call.)
-    if (cutout.asked && stored('romp.look') === null) {
+    if (cutout.asked) {
       cutout.slowFor = perf.fps < 17 ? cutout.slowFor + (now - last) / 1000 : 0;
-      if (cutout.slowFor > 4) { cutout.dropped = true; cutout.asked = false; tuning.look = 'avatar'; w.postMessage({ type: 'cut', on: false }); }
+      if (cutout.slowFor > 4) { cutout.dropped = true; cutout.asked = false; tuning.look = 'shadow'; w.postMessage({ type: 'cut', on: false }); }
     }
     if (m.cut) { cutout.bitmap?.close(); Object.assign(cutout, { bitmap: m.cut.bitmap, slots: m.cut.slots, seq: cutout.seq + 1, ok: true }); cutout.ms += (m.cutMs - cutout.ms) * 0.1; }
     else if (cutout.bitmap && !cutout.asked) { cutout.bitmap.close(); cutout.bitmap = null; cutout.slots = 0; }
@@ -436,6 +449,7 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
     } catch { copying = true; }
   else copying = true;
   if (copying) track.frames = 'copied';
+  if (nPlayers === 2 && !copying) pairUp(true);
   // `captureTime` is when the sensor took the frame (same clock as performance.now): true frame spacing for the
   // speed estimate, and the true age of every reading for prediction — not the jittery moment the callback ran.
   // On the direct route this callback only keeps the clock; on the copy route it also lifts the frame out.
@@ -455,6 +469,38 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
   };
   video.requestVideoFrameCallback(tick);
   return true;
+}
+
+// Two players, two trackers. The first worker keeps the GPU and takes player one's side of the picture; a second
+// worker runs the light model on the CPU and takes player two's — so they work at the same time instead of queueing
+// for one GPU. Each gets its own copy of the camera track's frames. The sides overlap a little in the middle so an
+// arm reaching toward the partner is not cut off. (Only on the direct route: copied frames go to one worker.)
+let partner: Worker | null = null, camTrack: MediaStreamTrack | null = null;
+const SIDES = [{ x0: 0.42, w: 0.58 }, { x0: 0, w: 0.58 }]; // raw picture: seat 0 (screen-left) is its right-hand side
+function pairUp(on: boolean) {
+  worker?.postMessage(on ? { type: 'half', seat: 0, ...SIDES[0] } : { type: 'half', seat: -1 });
+  worker?.postMessage({ type: 'players', n: 1 });
+  if (!on) return void partner?.postMessage({ type: 'idle', on: true });
+  if (partner) return void partner.postMessage({ type: 'idle', on: false });
+  if (!camTrack || typeof MediaStreamTrackProcessor !== 'function') return;
+  const w = (partner = new Worker(new URL('./pose.worker.ts', import.meta.url))), clock = frameClock();
+  let last = performance.now();
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'ready') {
+      const { readable } = new MediaStreamTrackProcessor({ track: camTrack!.clone(), maxBufferSize: 1 });
+      w.postMessage({ type: 'half', seat: 1, ...SIDES[1] });
+      w.postMessage({ type: 'stream', readable }, [readable as unknown as Transferable]);
+      track.partner = m.delegate;
+    }
+    if (m.type !== 'pose') return;
+    const now = performance.now();
+    apply(m.landmarks, m.aspect, clock.time(m.ts, m.arrived), 1);
+    if (strangers[1] > 20) { strangers[1] = 0; w.postMessage({ type: 'relook' }); }
+    track.fps2 += (1000 / (now - last) - track.fps2) * 0.1; track.model2 += (m.ms - track.model2) * 0.1;
+    last = now;
+  };
+  w.postMessage({ type: 'init', origin: location.origin, timeOrigin: performance.timeOrigin, model: '/models/pose_landmarker_lite.task', n: 1, cpu: true });
 }
 
 // A square around the pointing hand's palm (1.8 shoulder-widths across: the whole hand with margin, whatever the

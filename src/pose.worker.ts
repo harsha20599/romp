@@ -10,6 +10,10 @@ let gpu = false;
 let clockShift = 0; // worker clock → page clock: each has its own performance.now() zero
 let wantLuma = false, lumaBuf = new Uint8Array(0); // delay calibration: report each frame's brightness alongside its pose
 let gripRect: number[] | null = null; // [x, y, size] as fractions of the frame, while a menu wants the fist read
+// Two players: this tracker looks at one side of the picture only, for one seat, with the light single-person model
+// (`side`). Its partner — another worker like this one — takes the other side, so the two run side by side instead
+// of one model doing twice the work per frame (which measured 105ms a frame on the tablet: 8 readings a second).
+let half: { seat: number; x0: number; w: number } | null = null, side: PoseLandmarker | undefined, idle = false, relook = false, liteIsMain = false;
 let wantCut = false, nPlayers = 1; // cut-outs: the camera picture of each player with the room removed — only while something on screen shows them
 const glCanvas = new OffscreenCanvas(1, 1); // the pose model's GPU context lives on this canvas; the cut-outs are drawn with it too
 const gpuThenCpu = <T,>(make: (delegate: 'GPU' | 'CPU') => Promise<T>) => make('GPU').then((v) => ({ v, delegate: 'GPU' }), () => make('CPU').then((v) => ({ v, delegate: 'CPU' })));
@@ -110,16 +114,26 @@ async function pump(readable: ReadableStream<VideoFrame>) {
   for (;;) {
     const { value: frame, done } = await reader.read();
     if (done || !frame) return;
-    if (!landmarker) { frame.close(); continue; }
+    if (!landmarker || idle) { frame.close(); continue; }
     const arrived = performance.now() + clockShift, ts = frame.timestamp / 1000;
     first ||= ts - 1;
     sent = Math.max(sent + 1, ts - first); // the model wants strictly increasing timestamps
     try {
       const t0 = performance.now();
       let landmarks: NormalizedLandmark[][] = [], cut: ReturnType<typeof compose> = null, cutMs = 0;
+      const mine = half, tracker = mine ? side : landmarker;
+      if (mine && tracker) {
+        // Cut this seat's side out of the frame (no copy: a view onto the same pixels), track in it, and put the
+        // landmarks back into whole-frame coordinates so nothing downstream knows the difference.
+        const vr = frame.visibleRect!, x = (vr.x + Math.round(mine.x0 * vr.width)) & ~1, w = Math.min(vr.x + vr.width - x, Math.round(mine.w * vr.width)) & ~1;
+        const view = new VideoFrame(frame, { visibleRect: { x, y: vr.y, width: w, height: vr.height } });
+        if (relook) { relook = false; tracker.detectForVideo(new ImageData(64, 64), sent); sent += 1; } // a blank frame makes it forget whoever it was following
+        landmarks = tracker.detectForVideo(view, sent).landmarks.map((lm) => lm.map((q) => ({ ...q, x: (x - vr.x + q.x * w) / vr.width })));
+        view.close();
+      } else
       // With masks on, the result is only valid inside the callback (the masks are GPU textures the model reuses).
-      if (wantCut) landmarker.detectForVideo(frame, sent, (r) => { landmarks = r.landmarks; const c0 = performance.now(); cut = r.segmentationMasks?.length ? compose(frame, r.landmarks, r.segmentationMasks) : null; cutMs = performance.now() - c0; });
-      else landmarks = landmarker.detectForVideo(frame, sent).landmarks;
+      if (wantCut && !mine) landmarker.detectForVideo(frame, sent, (r) => { landmarks = r.landmarks; const c0 = performance.now(); cut = r.segmentationMasks?.length ? compose(frame, r.landmarks, r.segmentationMasks) : null; cutMs = performance.now() - c0; });
+      else if (!mine) landmarks = landmarker.detectForVideo(frame, sent).landmarks;
       const ms = performance.now() - t0 - cutMs;
       proven = true;
       let luma: number | undefined;
@@ -132,7 +146,7 @@ async function pump(readable: ReadableStream<VideoFrame>) {
         luma = sum / count;
       }
       const picture = cut as { bitmap: ImageBitmap; slots: number } | null; // (assigned inside the callback above)
-      (postMessage as (message: unknown, transfer: Transferable[]) => void)({ type: 'pose', landmarks, ts, arrived, ms, cutMs, luma, aspect: frame.displayWidth / frame.displayHeight, cut: picture }, picture ? [picture.bitmap] : []);
+      (postMessage as (message: unknown, transfer: Transferable[]) => void)({ type: 'pose', seat: mine?.seat, landmarks, ts, arrived, ms, cutMs, luma, aspect: frame.displayWidth / frame.displayHeight, cut: picture }, picture ? [picture.bitmap] : []);
       if (gripRect) {
         const [x, y, size] = gripRect, w = frame.displayWidth, h = frame.displayHeight, px = Math.round(size * w);
         const crop = await createImageBitmap(frame, Math.round(x * w), Math.round(y * h), px, px, { resizeWidth: 224, resizeHeight: 224, resizeQuality: 'medium' }).catch(() => null);
@@ -153,7 +167,9 @@ self.onmessage = async (e: MessageEvent) => {
       origin = m.origin; nPlayers = m.n;
       clockShift = performance.timeOrigin - m.timeOrigin;
       fileset = await FilesetResolver.forVisionTasks(`${origin}/wasm`);
-      const made = await gpuThenCpu((delegate) => PoseLandmarker.createFromOptions(fileset, {
+      liteIsMain = String(m.model).includes('lite');
+      const tryBoth = m.cpu ? <T,>(make: (delegate: 'GPU' | 'CPU') => Promise<T>) => make('CPU').then((v) => ({ v, delegate: 'CPU' })) : gpuThenCpu;
+      const made = await tryBoth((delegate) => PoseLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: origin + m.model, delegate }, runningMode: 'VIDEO', numPoses: m.n,
         ...(delegate === 'GPU' ? { canvas: glCanvas } : {}),
       }));
@@ -164,6 +180,16 @@ self.onmessage = async (e: MessageEvent) => {
       postMessage({ type: 'failed', why: String(err) });
     }
   } else if (m.type === 'players') { nPlayers = m.n; await landmarker?.setOptions({ numPoses: m.n }); }
+  else if (m.type === 'half') {
+    if (m.seat < 0) { half = null; return; }
+    if (liteIsMain) { side = landmarker; await landmarker?.setOptions({ numPoses: 1 }); }
+    else side ??= (await gpuThenCpu((delegate) => PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: `${origin}/models/pose_landmarker_lite.task`, delegate }, runningMode: 'VIDEO', numPoses: 1,
+      ...(delegate === 'GPU' ? { canvas: new OffscreenCanvas(1, 1) } : {}),
+    }))).v;
+    half = { seat: m.seat, x0: m.x0, w: m.w };
+  } else if (m.type === 'idle') idle = m.on;
+  else if (m.type === 'relook') relook = true;
   else if (m.type === 'cut') { if (gpu && wantCut !== m.on) { wantCut = m.on; await landmarker?.setOptions({ outputSegmentationMasks: m.on }); } }
   else if (m.type === 'stream') void pump(m.readable);
   else if (m.type === 'grip') gripRect = m.rect;

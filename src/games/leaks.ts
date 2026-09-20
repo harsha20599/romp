@@ -61,7 +61,7 @@ export default function leaks({ n, stage, best, onEnd, hud, scene }: Game) {
   return (rawDt: number) => {
     const dt = Math.min(rawDt, 0.05), t = tick(rawDt);
     if (t === null) return;
-    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update(dt, spots.filter((s) => s.on && s.zone === p).sort((a, b2) => a.age - b2.age)[0]).map((pad) => ({ ...pad, p })));
+    const pads: (Pad & { p: number })[] = bodies.flatMap((b, p) => b.update().map((pad) => ({ ...pad, p })));
     const finale = t > ROUND - FINALE;
     if (finale && !g.finale) { g.finale = true; hud.banner('The hull is going!', 1700); say('hurry_up'); hud.shake(1.2); sfx('impactMetal_heavy'); }
     if (!g.twist && t > 30) { g.twist = true; hud.banner('Pressure surge · cracks come in pairs', 1900); sfx('zapThreeToneUp', { vol: 0.7 }); }
