@@ -8,8 +8,11 @@ import {
   SphereGeometry, BoxGeometry, CylinderGeometry, ConeGeometry, CapsuleGeometry, TorusGeometry, BoundingBox, Mat4, Vec3, Quat,
   FILLMODE_NONE, RESOLUTION_AUTO, PROJECTION_ORTHOGRAPHIC, PROJECTION_PERSPECTIVE, GAMMA_SRGB, TONEMAP_LINEAR, FOG_LINEAR, FOG_NONE,
   BLEND_NORMAL, CULLFACE_NONE, SEMANTIC_POSITION, SEMANTIC_ATTR12, SEMANTIC_ATTR13, TYPE_FLOAT32, BUFFER_DYNAMIC, SHADERLANGUAGE_GLSL, CHUNKAPI_2_8,
+  Texture, PIXELFORMAT_RGBA8, FILTER_LINEAR, ADDRESS_CLAMP_TO_EDGE, BLEND_ADDITIVEALPHA, SEMANTIC_TEXCOORD0,
   type Asset, type Geometry, type Material, type ContainerResource, type GraphNode,
 } from 'playcanvas';
+import { cutout } from './pose.ts';
+import { CUT } from './cut.ts';
 import { effects, pace } from './pace.ts';
 
 export const W = 16, H = 9;
@@ -137,7 +140,7 @@ export const shapes = {
   cylinder: (radius: number, height: number, sides = 16) => fromGeometry(new CylinderGeometry({ radius, height, capSegments: sides })),
   cone: (radius: number, height: number, sides = 16) => fromGeometry(new ConeGeometry({ baseRadius: radius, peakRadius: 0, height, capSegments: sides })),
   // A rounded limb lying along +x that pivots at its near end: its straight part runs from x=0 to x=1, so scale.x is its length.
-  limb: (radius: number) => fromGeometry(new CapsuleGeometry({ radius, height: 1 + radius * 2, sides: 10, heightSegments: 1 }), new Mat4().setTRS(new Vec3(0.5, 0, 0), new Quat().setFromEulerAngles(0, 0, -90), Vec3.ONE)),
+  limb: (radius: number) => fromGeometry(new CapsuleGeometry({ radius, height: 1 + radius * 2, sides: 10, heightSegments: 1 }), new Mat4().setTRS(new Vec3(0.5, 0, 0), new Quat().setFromEulerAngles(0, 0, -90), new Vec3(1, 1, 0.02))), // pressed flat: limbs are drawn, and layer by their z like paper
   capsule: (radius: number, height: number) => fromGeometry(new CapsuleGeometry({ radius, height, sides: 12, heightSegments: 1 })),
   // Half a torus standing up in the xy plane (the engine's lies flat), like a horseshoe magnet.
   arch: (ring: number, tube: number) => fromGeometry(new TorusGeometry({ ringRadius: ring, tubeRadius: tube, sectorAngle: 180, segments: 20, sides: 8 }), new Mat4().setFromEulerAngles(90, 0, 0)),
@@ -234,20 +237,105 @@ export function instanced(parent: GraphNode, mesh: Mesh, count: number, opacity 
   };
 }
 
-// A strip of triangles rewritten every frame (the hand ribbons).
+// ---- the player's own picture, in the game ---------------------------------------------------------------------------
+// One texture holds every player's cut-out side by side, each as [picture | mask] (pose.worker.ts draws it). This
+// material turns a slot of it into a character: the body graded toward the game's palette and lit from behind in
+// the player's colour, a thick outline and a soft glow around it — the things that make a rough 256px person mask
+// look deliberate. `shadow` swaps the picture for a gradient of the player's colour (the same shape, nothing of the room).
+let cutTexture: Texture | null = null, cutSeen = -1;
+const cutTex = () => cutTexture ?? (cutTexture = new Texture(device, { name: 'cut-outs', width: 4, height: 4, format: PIXELFORMAT_RGBA8, mipmaps: false, minFilter: FILTER_LINEAR, magFilter: FILTER_LINEAR, addressU: ADDRESS_CLAMP_TO_EDGE, addressV: ADDRESS_CLAMP_TO_EDGE }));
+export function refreshCutouts() { // call once a frame, by whoever shows cut-outs
+  if (cutout.seq === cutSeen || !cutout.bitmap) return cutout.slots;
+  cutSeen = cutout.seq;
+  if (cutTex().width !== cutout.bitmap.width || cutTex().height !== cutout.bitmap.height) cutTex().resize(cutout.bitmap.width, cutout.bitmap.height);
+  cutTex().setSource(cutout.bitmap as unknown as HTMLCanvasElement);
+  return cutout.slots;
+}
+export function cutoutLook(hex: string, shadow: boolean) {
+  const m = new ShaderMaterial({
+    uniqueName: 'romp-cutout',
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; uniform vec2 uSize; varying vec2 vUv;
+      void main(void) { vUv = vertex_position.xy / uSize + 0.5; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec2 vUv; uniform sampler2D uCut; uniform vec4 uSlot; uniform vec3 uTint; uniform float uShadow; uniform float uTime;
+      float maskAt(vec2 uv) { vec2 c = clamp(uv, vec2(0.004), vec2(0.996)); return texture2D(uCut, vec2((uSlot.x + 0.5 + 0.5 * c.x) * uSlot.y, 1.0 - c.y)).r * step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0); }
+      float ring(vec2 uv, float r) { // the mask, grown by r: the widest it gets in eight directions
+        vec2 d = vec2(r * 1.333, r); float v = 0.0;
+        v = max(v, maskAt(uv + d * vec2(1.0, 0.0))); v = max(v, maskAt(uv + d * vec2(-1.0, 0.0))); v = max(v, maskAt(uv + d * vec2(0.0, 1.0))); v = max(v, maskAt(uv + d * vec2(0.0, -1.0)));
+        v = max(v, maskAt(uv + d * vec2(0.7, 0.7))); v = max(v, maskAt(uv + d * vec2(-0.7, 0.7))); v = max(v, maskAt(uv + d * vec2(0.7, -0.7))); v = max(v, maskAt(uv + d * vec2(-0.7, -0.7)));
+        return v;
+      }
+      void main(void) {
+        float a = smoothstep(0.42, 0.62, maskAt(vUv)), line = smoothstep(0.4, 0.6, ring(vUv, 0.012)), glow = ring(vUv, 0.035);
+        float inner = a * (1.0 - smoothstep(0.55, 0.95, min(maskAt(vUv + vec2(0.02, 0.0)), min(maskAt(vUv - vec2(0.02, 0.0)), min(maskAt(vUv + vec2(0.0, 0.015)), maskAt(vUv - vec2(0.0, 0.015))))))); // just inside the edge
+        vec2 c = clamp(vUv, vec2(0.004), vec2(0.996));
+        vec3 seen = pow(texture2D(uCut, vec2((uSlot.x + 0.5 * c.x) * uSlot.y, 1.0 - c.y)).rgb, vec3(2.2));
+        float luma = dot(seen, vec3(0.3, 0.6, 0.1));
+        seen = mix(vec3(luma), seen, 1.25) * 1.12; seen = mix(seen, seen * (0.6 + uTint), 0.22); // a little more colour, and a lean toward the player's own
+        vec3 flat_ = uTint * (0.35 + 0.75 * vUv.y) + vec3(0.25) * smoothstep(0.0, 0.08, sin((vUv.x + vUv.y) * 9.0 - uTime * 1.7) - 0.92);
+        vec3 body = mix(seen, flat_, uShadow) + uTint * inner * 0.9; // lit from behind
+        vec3 rgb = mix(uTint * 1.3 + 0.15, body, a);
+        float alpha = max(a, max(line, glow * glow * 0.45));
+        gl_FragColor = vec4(gammaCorrectOutput(rgb), alpha);
+      }`,
+  });
+  m.blendType = BLEND_NORMAL; m.cull = CULLFACE_NONE; m.depthWrite = false;
+  m.setParameter('uCut', cutTex()); m.setParameter('uTint', linear(hex)); m.setParameter('uShadow', shadow ? 1 : 0); m.setParameter('uTime', 0);
+  m.setParameter('uSize', [CUT.left * 2, CUT.up + CUT.down]); m.setParameter('uSlot', [0, 1, 0, 0]);
+  m.update();
+  return own(m);
+}
+
+// Light itself: adds to whatever is behind it, brightest in the middle, gone at the rim. Halos, glass hands, sparks.
+export function glowLook(hex: string, strength = 1) {
+  const m = new ShaderMaterial({
+    uniqueName: 'romp-glow',
+    attributes: { vertex_position: SEMANTIC_POSITION },
+    vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vAt;
+      void main(void) { vAt = vertex_position.xy; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec2 vAt; uniform vec3 uGlow; uniform float uPower;
+      void main(void) { float d = length(vAt), core = smoothstep(0.3, 0.12, d), halo = pow(max(0.0, 1.0 - d), 2.0); gl_FragColor = vec4(gammaCorrectOutput(uGlow * halo + vec3(core)), (halo * 0.85 + core) * uPower); }`,
+  });
+  m.blendType = BLEND_ADDITIVEALPHA; m.depthWrite = false; m.cull = CULLFACE_NONE;
+  m.setParameter('uGlow', linear(hex)); m.setParameter('uPower', strength);
+  m.update();
+  return own(m);
+}
+
+// The light a fast hand leaves behind: white-hot at the hand, the player's colour along it, nothing at the tail.
+export function trailLook(hex: string) {
+  const m = new ShaderMaterial({
+    uniqueName: 'romp-trail',
+    attributes: { vertex_position: SEMANTIC_POSITION, vertex_texCoord0: SEMANTIC_TEXCOORD0 },
+    vertexGLSL: `attribute vec3 vertex_position; attribute vec2 vertex_texCoord0; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vAlong;
+      void main(void) { vAlong = vertex_texCoord0; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
+    fragmentGLSL: `#include "gammaPS"
+      varying vec2 vAlong; uniform vec3 uGlow;
+      void main(void) { float t = vAlong.x, edge = 1.0 - abs(vAlong.y * 2.0 - 1.0), core = smoothstep(0.55, 1.0, edge) * (1.0 - t); gl_FragColor = vec4(gammaCorrectOutput(mix(uGlow * 1.4, vec3(1.0), core)), pow(1.0 - t, 1.2) * smoothstep(0.0, 0.6, edge)); }`,
+  });
+  m.blendType = BLEND_ADDITIVEALPHA; m.depthWrite = false; m.cull = CULLFACE_NONE;
+  m.setParameter('uGlow', linear(hex));
+  m.update();
+  return own(m);
+}
+
+// A strip of triangles rewritten every frame (the hand ribbons). Each vertex knows how far along the strip it is (u)
+// and which edge it is on (v), for materials that fade along and across it.
 export function ribbon(parent: GraphNode, points: number, material: Material) {
   const mesh = own(new Mesh(device)), positions = new Float32Array(points * 6), indices: number[] = [];
   for (let k = 0; k < points - 1; k++) indices.push(2 * k, 2 * k + 1, 2 * k + 2, 2 * k + 1, 2 * k + 3, 2 * k + 2);
-  mesh.setPositions(positions); mesh.setIndices(indices); mesh.update();
+  mesh.setPositions(positions); mesh.setIndices(indices); mesh.setUvs(0, Array.from({ length: points * 2 }, (_, i) => [(i >> 1) / (points - 1), i & 1]).flat()); mesh.update();
   const e = node(parent, mesh, material);
   (e.render!.meshInstances[0]).cull = false; // rewritten every frame; cached bounds would be stale
   return { entity: e, positions, commit() { mesh.setPositions(positions); mesh.update(undefined, false); } };
 }
 
 // ---- a round --------------------------------------------------------------------------------------------------------
-export type Scene = { root: Entity; camera: Entity; ambient: (hex: string, k?: number) => void; sky: (hex: string | null) => void; fog: (hex: string, start: number, end: number) => void };
+export type Scene = { root: Entity; camera: Entity; cleanup: (fn: () => void) => void; ambient: (hex: string, k?: number) => void; sky: (hex: string | null) => void; fog: (hex: string, start: number, end: number) => void };
 type Tick = (dt: number) => void;
-let live: { root: Entity; frame?: CameraFrame; tick?: Tick; t: number; warm: number; hidden: GraphNode[] } | null = null;
+let live: { root: Entity; frame?: CameraFrame; tick?: Tick; t: number; warm: number; hidden: GraphNode[]; cleanups: (() => void)[] } | null = null;
 let paused = false;
 
 const compiled = () => (device as unknown as { _shaderStats: { linked: number } })._shaderStats.linked;
@@ -303,10 +391,11 @@ export function begin(view?: View): Scene {
   app.scene.ambientLight = new Color(0.45, 0.45, 0.45);
   app.scene.fog.type = FOG_NONE;
   app.root.addChild(root);
-  live = { root, t: 0, warm: 0, hidden: [] };
+  const cleanups: (() => void)[] = [];
+  live = { root, t: 0, warm: 0, hidden: [], cleanups };
   quality.last = 0;
   return {
-    root, camera,
+    root, camera, cleanup: (fn) => void cleanups.push(fn),
     ambient: (hex, k = 1) => { const c = color(hex); app.scene.ambientLight = new Color(c.r * k, c.g * k, c.b * k); },
     sky: (hex) => { const c = hex ? color(hex) : null; camera.camera!.clearColor = c ? new Color(c.r, c.g, c.b, 1) : new Color(0, 0, 0, 0); },
     fog: (hex, start, end) => { const f = app.scene.fog; f.type = FOG_LINEAR; f.color = color(hex).clone(); f.start = start; f.end = end; },
@@ -333,6 +422,7 @@ export function run(tick: Tick) {
 
 export function end() {
   if (!live) return;
+  for (const fn of live.cleanups) fn();
   live.frame?.destroy();
   live.root.destroy();
   for (const thing of owned) thing.destroy();

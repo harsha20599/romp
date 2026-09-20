@@ -65,6 +65,9 @@ export const tuning = {
   model: (stored('romp.model') === 'lite' ? 'lite' : 'full') as 'lite' | 'full', // full: steadier wrists, a few ms slower. Switchable on the Tracking screen.
   sharp: stored('romp.sharp') !== 'off', // our own auto-exposure with the shutter capped at 16ms (see tuneCamera): sharper fast hands and a steady 30fps
   direct: stored('romp.frames') !== 'copied', // stream camera frames straight into the tracker (off = copy them out of the <video>, the old route)
+  // How players are shown in full-body games: 'camera' = their own picture, lifted out of the room; 'shadow' = the same
+  // shape filled with their colour; 'avatar' = a drawn character from the skeleton (no mask needed: the cheapest).
+  look: (['camera', 'shadow', 'avatar'].includes(stored('romp.look') ?? '') ? stored('romp.look') : 'camera') as 'camera' | 'shadow' | 'avatar',
   fastCam: stored('romp.cam') !== 'standard', // take the camera's 60fps mode when it has one, even at a smaller picture
 };
 
@@ -258,6 +261,17 @@ function apply(poses: NormalizedLandmark[][], aspect: number, now = performance.
   });
 }
 
+// The players' cut-outs (see pose.worker.ts compose): the newest picture, how many players are in it, and a counter that
+// goes up with each one. `want` is a count of things on screen showing a cut-out; the mask costs GPU time, so it is
+// only computed while that is above zero. `ok` turns true once a picture has actually arrived on this device.
+export const cutout = { bitmap: null as ImageBitmap | null, slots: 0, seq: 0, ms: 0, ok: false, asked: false, dropped: false, slowFor: 0 };
+let cutWanted = 0;
+export function wantCutout(on: boolean) {
+  cutWanted = Math.max(0, cutWanted + (on ? 1 : -1));
+  const ask = cutWanted > 0 && tuning.look !== 'avatar';
+  if (ask !== cutout.asked) { cutout.asked = ask; worker?.postMessage({ type: 'cut', on: ask }); }
+}
+
 // camFps vs the pose fps tells you which side is the bottleneck; grab = copying the frame out, model = the tracker itself.
 export const track = { lag: 0, camera: '', camFps: 0, grabMs: 0, modelMs: 0, frames: '' }; // frames: 'direct' (streamed to the tracker) or 'copied'
 
@@ -364,6 +378,7 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
   if (!ready) return w.terminate(), false;
   worker = w;
   perf.delegate = `${ready} worker`;
+  if (cutout.asked) w.postMessage({ type: 'cut', on: true });
 
   const clock = frameClock();
   let busy = false, last = performance.now(), sent = 0, lastCam = 0, copying = false, aspect = 16 / 9, waiting: { bitmap: ImageBitmap; t: number } | null = null;
@@ -394,6 +409,15 @@ async function startWorker(video: HTMLVideoElement, model: string, cam: MediaStr
     perf.fps += (1000 / (now - last) - perf.fps) * 0.1;
     track.lag += (now - t - track.lag) * 0.1;
     track.modelMs += (m.ms - track.modelMs) * 0.1;
+    // The mask is a luxury. If the tracker cannot hold ~17 frames a second with it on, for four seconds running,
+    // it goes — for the rest of the session — and players are drawn as characters instead. Tracking speed is the game.
+    // (Not when the look was chosen by hand on the Tracking screen: then it is the player's call.)
+    if (cutout.asked && stored('romp.look') === null) {
+      cutout.slowFor = perf.fps < 17 ? cutout.slowFor + (now - last) / 1000 : 0;
+      if (cutout.slowFor > 4) { cutout.dropped = true; cutout.asked = false; tuning.look = 'avatar'; w.postMessage({ type: 'cut', on: false }); }
+    }
+    if (m.cut) { cutout.bitmap?.close(); Object.assign(cutout, { bitmap: m.cut.bitmap, slots: m.cut.slots, seq: cutout.seq + 1, ok: true }); cutout.ms += (m.cutMs - cutout.ms) * 0.1; }
+    else if (cutout.bitmap && !cutout.asked) { cutout.bitmap.close(); cutout.bitmap = null; cutout.slots = 0; }
     last = now;
     if (copying) void askGrip(video, w); else w.postMessage({ type: 'grip', rect: gripRect(aspect, 1) });
   };

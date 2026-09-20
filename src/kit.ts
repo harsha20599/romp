@@ -1,9 +1,10 @@
 // What every game shares: the round clock, sound, the players' hands, bursts, and the small geometry of hit-testing.
 // (The React shell that mounts a game lives in stage.tsx; nothing here touches React.)
 import type { Entity, GraphNode } from 'playcanvas';
-import { players, predict, sim, track, tuning } from './pose.ts';
+import { cutout, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
+import { CUT } from './cut.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
-import { H, W, flat, instanced, node, ribbon, shapes, show, type Scene, type View } from './engine.ts';
+import { H, W, cutoutLook, flat, glowLook, instanced, node, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
 export { audio, blip, jingle, music, say, sfx, whoosh } from './audio.ts';
 export { H, W, hitStop } from './engine.ts';
 export { PLAYER_COLORS } from './pace.ts';
@@ -118,9 +119,12 @@ export type StageHand = { p: number; x: number; y: number; px: number; py: numbe
 export type HandMap = { cx: (p: number) => number; hw: number; hh: number; cy?: number };
 // `swing`: hand speed (stage units/s) that earns a whoosh the moment it is reached; 0 = silent hands.
 export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw: zoneHalf(n), hh: H / 2 }, swing = 6) {
-  const ball = shapes.sphere(0.18, 10);
+  // Glass hands: a bead of light with a halo in the player's colour, and a trail that is brightest at the hand and
+  // fades to nothing — light, not paint, so fast hands never hide what they are about to hit.
+  const bead = shapes.quad(2, 2);
   const all = Array.from({ length: n * 2 }, (_, i) => {
-    const hex = PLAYER_COLORS[i >> 1], trail = ribbon(scene.root, TRAIL, flat(hex, { opacity: 0.7, twoSided: true })), cursor: Entity = node(scene.root, ball, flat(hex));
+    const hex = PLAYER_COLORS[i >> 1], trail = ribbon(scene.root, TRAIL, trailLook(hex)), cursor: Entity = node(scene.root, bead, glowLook(hex));
+    cursor.setLocalScale(1, 1, 1);
     const pts = new Float32Array(TRAIL * 2);
     return { trail, cursor, pts, age: new Float32Array(TRAIL), armed: true, state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false, pts } as StageHand };
   });
@@ -140,6 +144,8 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
       s.x = s.px + (tx - s.px) * k;
       s.y = s.py + (ty - s.py) * k;
       cursor.setLocalPosition(s.x, s.y, 1);
+      const swell = 0.95 + Math.min(0.7, s.speed * 0.04); // a fast hand burns brighter
+      cursor.setLocalScale(swell, swell, 1);
       if (was) { pts.copyWithin(2, 0, (TRAIL - 1) * 2); age.copyWithin(1, 0, TRAIL - 1); for (let k = 1; k < TRAIL; k++) age[k] += dt; }
       else for (let k = 0; k < TRAIL; k++) { pts.set([s.x, s.y], k * 2); age[k] = k ? 1 : 0; }
       pts.set([s.x, s.y], 0);
@@ -154,7 +160,7 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
       const pos = trail.positions;
       for (let k = 0; k < TRAIL; k++) {
         const a = Math.max(k - 1, 0) * 2, b = Math.min(k + 1, TRAIL - 1) * 2;
-        const dx = pts[b] - pts[a], dy = pts[b + 1] - pts[a + 1], len = Math.hypot(dx, dy) || 1, w = 0.16 * (1 - k / TRAIL);
+        const dx = pts[b] - pts[a], dy = pts[b + 1] - pts[a + 1], len = Math.hypot(dx, dy) || 1, w = (0.2 + Math.min(0.22, s.speed * 0.018)) * (1 - (k / TRAIL) * 0.85);
         pos.set([pts[2 * k] - (dy / len) * w, pts[2 * k + 1] + (dx / len) * w, 0.9, pts[2 * k] + (dy / len) * w, pts[2 * k + 1] - (dx / len) * w, 0.9], k * 6);
       }
       trail.commit();
@@ -178,38 +184,69 @@ export function segDist(px: number, py: number, ax: number, ay: number, bx: numb
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
 
-// The player's whole body on the stage, for games played with more than hands: a stick figure drawn from the rig,
-// and its "pads" — the parts that can touch things (hands, head, elbows, knees, feet) in stage units. Seeing your own
-// body is what makes a full-body game readable: you trust the tracking because you can watch it, and you can see
-// which foot the game thinks is where. `at` is where the middle of the shoulders sits; `scale` is stage units per
-// shoulder-width (1.25 fits a standing adult, arms up, into the 9-unit-high stage).
-const BONES = [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27], [24, 26], [26, 28], [11, 12], [23, 24], [11, 23], [12, 24]];
+// The player's whole body on the stage, for games played with more than hands. Two looks, one interface:
+//  · their own picture, lifted out of the room and lit in their colour (or the same shape as a glowing shadow) —
+//    drawn from the tracker's person mask, so it is only there on devices and routes that can make one;
+//  · a drawn character built on the skeleton — round limbs with an outline, gloves, shoes, a face that looks where
+//    the action is and puffs when you work. It needs nothing but the landmarks, so it is also what ?sim shows.
+// Either way the "pads" — the parts that can touch things (hands, head, elbows, knees, feet), in stage units — come
+// from the same rig, so a game never knows which look is on. `at` is where the middle of the shoulders sits;
+// `scale` is stage units per shoulder-width (1.2 fits a standing adult, arms up, into the 9-unit-high stage).
+const BONES: [number, number, number][] = [[11, 13, 0.15], [13, 15, 0.13], [12, 14, 0.15], [14, 16, 0.13], [23, 25, 0.19], [25, 27, 0.16], [24, 26, 0.19], [26, 28, 0.16]];
 export type Pad = { part: 'hand' | 'head' | 'elbow' | 'knee' | 'foot'; side: number; x: number; y: number; vx: number; vy: number; seen: boolean };
 const PADS: [Pad['part'], number, number[]][] = [['hand', 0, [15, 19]], ['hand', 1, [16, 20]], ['head', 0, [0]], ['elbow', 0, [13]], ['elbow', 1, [14]], ['knee', 0, [25]], ['knee', 1, [26]], ['foot', 0, [27, 31]], ['foot', 1, [28, 32]]];
-export function figure(scene: Scene, p: number, at: { x: number; y: number; scale: number }, opacity = 0.9) {
-  const hex = PLAYER_COLORS[p], look = flat(hex, { opacity }), group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
-  const limbMesh = shapes.limb(0.14), bones = BONES.map(() => node(group, limbMesh, look)), head = node(group, shapes.circle(0.42, 24), look);
-  const dotMesh = shapes.circle(0.26, 16), dotLook = flat('#ffffff', { opacity: 0.95 }), dots = PADS.map(([part]) => (part === 'head' ? null : node(group, dotMesh, dotLook)));
+const INK = '#1b1240', DEG = 180 / Math.PI;
+export function figure(scene: Scene, p: number, at: { x: number; y: number; scale: number }) {
+  const hex = PLAYER_COLORS[p], k = at.scale, group = node(scene.root, undefined, undefined, [at.x, at.y, 0.6]);
   const pads: Pad[] = PADS.map(([part, side]) => ({ part, side, x: 0, y: 0, vx: 0, vy: 0, seen: false }));
-  const update = () => {
-    const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33, k = at.scale;
+
+  // ---- their own picture ----
+  const wantsPicture = tuning.look !== 'avatar' && !sim, look = wantsPicture ? cutoutLook(hex, tuning.look === 'shadow') : null;
+  const picture = look ? node(group, shapes.quad(CUT.left * 2, CUT.up + CUT.down), look, [0, ((CUT.up - CUT.down) / 2) * k, 0]) : null;
+  picture?.setLocalScale(k, k, 1);
+  if (wantsPicture) { wantCutout(true); scene.cleanup(() => wantCutout(false)); }
+  const ground = node(group, shapes.circle(1, 24), flat('#000000', { opacity: 0.3 }), [0, -3.95 * k, -0.2]); // a soft footing under whoever it is
+  ground.setLocalScale(1.5 * k, 0.2 * k, 1);
+
+  // ---- the drawn character ----
+  const puppet = node(group), ink = flat(INK), skin = flat(hex), white = flat('#ffffff'), dark = flat('#0f0a2a');
+  const limb = (r: number, z: number) => { const e = node(puppet, shapes.limb(r * k), skin, [0, 0, z]); node(e, shapes.limb((r + 0.05) * k), ink, [0, 0, -0.02]); return e; };
+  const round = (r: number, mat = skin, z = 0.04) => { const e = node(puppet, shapes.circle(r * k, 24), mat, [0, 0, z]); node(e, shapes.circle((r + 0.05) * k, 24), ink, [0, 0, -0.02]); return e; };
+  const torso = limb(0.44, 0), bones = BONES.map(([, , r]) => limb(r, 0.02)), head = round(0.5, skin, 0.06);
+  const mitts = [0, 1].map(() => round(0.22, white, 0.08)), shoes = [0, 1].map(() => round(0.2, white, 0.03));
+  const eyes = [-1, 1].map((side) => { const e = node(head, shapes.circle(0.13 * k, 16), white, [side * 0.18 * k, 0.06 * k, 0.02]); return { e, pupil: node(e, shapes.circle(0.065 * k, 12), dark, [0, 0, 0.01]) }; });
+  const mouth = node(head, shapes.circle(0.09 * k, 14), dark, [0, -0.2 * k, 0.02]);
+  const face = { blink: 2, puff: 0, lx: 0, ly: 0 };
+  const place = (e: Entity, A: number[], B: number[]) => { e.setLocalPosition(A[0] * k, A[1] * k, e.getLocalPosition().z); e.setLocalEulerAngles(0, 0, Math.atan2(B[1] - A[1], B[0] - A[0]) * DEG); e.setLocalScale(Math.max(0.01, Math.hypot(B[0] - A[0], B[1] - A[1]) * k), 1, 1); };
+
+  // `lookAt`: the stage point the character's eyes should follow (the nearest balloon, the newest crack).
+  const update = (dt = 1 / 60, lookAt?: { x: number; y: number }) => {
+    const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33;
     if (!show(group, on)) { for (const pad of pads) pad.seen = false; return pads; }
-    BONES.forEach(([a, b], i) => {
-      const A = rig[a], B = rig[b];
-      if (!show(bones[i], A[2] > 0.4 && B[2] > 0.4)) return;
-      bones[i].setLocalPosition(A[0] * k, A[1] * k, 0);
-      bones[i].setLocalEulerAngles(0, 0, Math.atan2(B[1] - A[1], B[0] - A[0]) * (180 / Math.PI));
-      bones[i].setLocalScale(Math.hypot(B[0] - A[0], B[1] - A[1]) * k, 1, 1);
-    });
-    head.setLocalPosition(rig[0][0] * k, rig[0][1] * k, 0.05);
+    const drawn = !(picture && tuning.look !== 'avatar' && refreshCutouts() > p); // (the look can fall back to the character mid-round: see pose.ts)
+    if (picture) { show(picture, !drawn); look!.setParameter('uSlot', [p, 1 / Math.max(1, cutout.slots), 0, 0]); look!.setParameter('uTime', performance.now() / 1000); }
+    if (show(puppet, drawn)) {
+      const mid = (a: number, b: number) => [(rig[a][0] + rig[b][0]) / 2, (rig[a][1] + rig[b][1]) / 2];
+      place(torso, mid(11, 12), mid(23, 24));
+      BONES.forEach(([a, b], i) => { if (show(bones[i], rig[a][2] > 0.4 && rig[b][2] > 0.4)) place(bones[i], rig[a], rig[b]); });
+      head.setLocalPosition(rig[0][0] * k, (rig[0][1] + 0.08) * k, 0.06);
+      [15, 16].forEach((j, h) => { if (show(mitts[h], rig[j][2] > 0.4)) mitts[h].setLocalPosition((rig[j][0] * 0.4 + rig[j + 4][0] * 0.6) * k, (rig[j][1] * 0.4 + rig[j + 4][1] * 0.6) * k, 0.08); });
+      [27, 28].forEach((j, h) => { if (show(shoes[h], rig[j][2] > 0.4)) { shoes[h].setLocalPosition((rig[j][0] + rig[j + 4][0]) * 0.5 * k, (rig[j][1] + rig[j + 4][1]) * 0.5 * k - 0.04 * k, 0.03); shoes[h].setLocalScale(1.35, 0.8, 1); } });
+      // The face: eyes follow the action, blink now and then; the mouth opens with effort.
+      const tx = lookAt ? lookAt.x - (at.x + rig[0][0] * k) : 0, ty = lookAt ? lookAt.y - (at.y + rig[0][1] * k) : 0, far = Math.hypot(tx, ty) || 1;
+      face.lx += ((tx / far) * 0.05 * k - face.lx) * Math.min(1, dt * 10); face.ly += ((ty / far) * 0.05 * k - face.ly) * Math.min(1, dt * 10);
+      face.blink -= dt; if (face.blink < -0.12) face.blink = 2 + Math.random() * 3;
+      const speed = Math.hypot(rig[15][3], rig[15][4]) + Math.hypot(rig[16][3], rig[16][4]) + Math.hypot(rig[27][3], rig[27][4]) + Math.hypot(rig[28][3], rig[28][4]);
+      face.puff += (Math.min(1, speed / 9) - face.puff) * Math.min(1, dt * 5);
+      for (const eye of eyes) { eye.e.setLocalScale(1, face.blink < 0 ? 0.12 : 1, 1); eye.pupil.setLocalPosition(face.lx, face.ly, 0.01); }
+      mouth.setLocalScale(1 + face.puff * 0.6, 0.45 + face.puff * 1.3, 1);
+    }
     PADS.forEach(([, , joints], i) => {
       const pad = pads[i];
       let x = 0, y = 0, vx = 0, vy = 0, vis = 1;
       for (const j of joints) { x += rig[j][0]; y += rig[j][1]; vx += rig[j][3]; vy += rig[j][4]; vis = Math.min(vis, rig[j][2]); }
       const c = k / joints.length;
       Object.assign(pad, { x: at.x + x * c, y: at.y + y * c, vx: vx * c, vy: vy * c, seen: vis > 0.45 });
-      const dot = dots[i];
-      if (dot && show(dot, pad.seen)) dot.setLocalPosition(x * c, y * c, 0.1);
     });
     return pads;
   };

@@ -2,7 +2,7 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
-import { grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
+import { cutout, grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { report } from './report.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestScore, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, variantOf, xpOf } from './meta.ts';
@@ -203,9 +203,14 @@ function Presence({ small }: { small: boolean }) {
       players.forEach((pl, i) => {
         if (!pl.present || !pl.body.length) return;
         const b = pl.body, seen = (k: number) => b[k][2] > 0.5;
-        g.strokeStyle = g.fillStyle = PLAYER_COLORS[i]; g.lineWidth = H * 0.035; g.lineCap = 'round';
-        for (const [a, z] of BONES) if (seen(a) && seen(z)) { g.beginPath(); g.moveTo(b[a][0] * W, b[a][1] * H); g.lineTo(b[z][0] * W, b[z][1] * H); g.stroke(); }
-        g.beginPath(); g.arc(b[0][0] * W, b[0][1] * H, H * 0.06, 0, 7); g.fill();
+        // A glowing mannequin rather than a wire skeleton: a filled torso, round limbs that taper, a head, all lit in the player's colour.
+        const tone = PLAYER_COLORS[i], unit = Math.hypot((b[11][0] - b[12][0]) * W, (b[11][1] - b[12][1]) * H) || H * 0.1, at = (k: number) => [b[k][0] * W, b[k][1] * H] as const;
+        g.lineCap = g.lineJoin = 'round'; g.shadowColor = tone; g.shadowBlur = unit * 0.5; g.strokeStyle = g.fillStyle = tone;
+        if ([11, 12, 23, 24].every(seen)) { g.beginPath(); g.moveTo(...at(11)); g.lineTo(...at(12)); g.lineTo(...at(24)); g.lineTo(...at(23)); g.closePath(); g.lineWidth = unit * 0.34; g.stroke(); g.fill(); }
+        for (const [a, z] of BONES) if (seen(a) && seen(z) && !(a === 11 && z === 12) && !(a === 23 && z === 24)) { g.lineWidth = unit * (a >= 23 ? 0.36 : 0.28) * (z >= 25 || z === 15 || z === 16 ? 0.8 : 1); g.beginPath(); g.moveTo(...at(a)); g.lineTo(...at(z)); g.stroke(); }
+        g.beginPath(); g.arc(b[0][0] * W, b[0][1] * H - unit * 0.05, unit * 0.42, 0, 7); g.fill();
+        g.shadowBlur = 0; g.fillStyle = '#ffffff';
+        for (const k of [15, 16, 27, 28]) if (seen(k)) { g.beginPath(); g.arc(...at(k), unit * 0.17, 0, 7); g.fill(); } // hands and feet: what the games read
         if (i) return;
         const width = Math.hypot(b[11][0] - b[12][0], b[11][1] - b[12][1]), mid = (b[11][0] + b[12][0]) / 2;
         say = !seen(27) && !seen(28) ? 'Step back — I cannot see your feet' : b[0][1] < 0.04 ? 'Step back — your head is cut off' : width < 0.05 ? 'Come a little closer'
@@ -301,7 +306,7 @@ function App() {
   const teamOf = (game: Game) => n === 2 && !!game.team && (coop || !!game.crew);
   const finish = (run: Round, gameScores: number[], gameNotes: string[][] = []) => {
     const team = teamOf(run.game), variant = variantOf(run.mode, team);
-    report('round', { game: run.game.id, stage: run.stage, mode: run.mode, team, players: n, glow: effects.on, ...paceSummary() });
+    report('round', { game: run.game.id, stage: run.stage, mode: run.mode, team, players: n, glow: effects.on, look: tuning.look, cutMs: +cutout.ms.toFixed(1), cutDropped: cutout.dropped, ...paceSummary() });
     const earned = gameScores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
     const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned], notes = [...run.notes, ...gameScores.map((_, i) => gameNotes[i] ?? [])];
     if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points, notes });
@@ -506,6 +511,15 @@ function App() {
             <p className="dim num">Camera {track.camera || '—'}</p>
             <p className="dim num"><TrackerDetail /></p>
             <p className="dim">Hold a hand still: the yellow scribble behind the dot is the tracking noise. Wave fast: a smeared, lagging trail means motion blur — add light, or try Sharp motion.</p>
+            <div className="row">
+              <span className="label">Your look</span>
+              <div className="seg">
+                <button aria-pressed={tuning.look === 'camera'} onClick={() => setTracker('romp.look', 'camera')}>Camera</button>
+                <button aria-pressed={tuning.look === 'shadow'} onClick={() => setTracker('romp.look', 'shadow')}>Shadow</button>
+                <button aria-pressed={tuning.look === 'avatar'} onClick={() => setTracker('romp.look', 'avatar')}>Character</button>
+              </div>
+              <span className="dim">In full-body games: your own picture lifted out of the room, the same shape as a glowing shadow, or a drawn character. The first two cost the tracker some speed; it falls back to the character by itself if it cannot keep up.</span>
+            </div>
             <div className="row">
               <span className="label">Model</span>
               <div className="seg">
