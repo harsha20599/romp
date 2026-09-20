@@ -624,8 +624,8 @@ function startSim() {
       pl.liftV = 0;
       pl.lean = keys.has('ArrowRight') ? 0.6 : keys.has('ArrowLeft') ? -0.6 : 0;
       pl.steer = Math.sign(pl.lean);
-      pl.hands[0] = { x: -0.5, y: keys.has('a') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
-      if (keys.has('d') || e.key === 'd') pl.hands[1] = { x: 0.5, y: keys.has('d') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
+      pl.hands[0] = { x: -0.5, y: keys.has('a') || keys.has('j') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
+      if (keys.has('d') || e.key === 'd' || e.key === 'j') pl.hands[1] = { x: 0.5, y: keys.has('d') || keys.has('j') ? 0.8 : -0.5, vx: 0, vy: 0, ax: 0, ay: 0, seen: true, t: performance.now() };
     }
   };
   addEventListener('keydown', body);
@@ -638,10 +638,10 @@ function startSim() {
       const set = (k: number, x: number, y: number) => { rig[k][3] = pl.rig[k] ? (x - pl.rig[k][0]) * 60 : 0; rig[k][4] = pl.rig[k] ? (y - pl.rig[k][1]) * 60 : 0; rig[k][0] = x; rig[k][1] = y; };
       set(0, dx, 0.75 + dy);
       [-1, 1].forEach((side, h) => {
-        const hand = pl.hands[h], knee = keys.has(h ? 'e' : 'q'), kick = keys.has(h ? 'c' : 'z');
+        const hand = pl.hands[h], knee = keys.has(h ? 'e' : 'q'), kick = keys.has(h ? 'c' : 'z') || keys.has('j'); // J = a jumping jack
         set(11 + h, side * 0.5 + dx * 0.8, dy); set(23 + h, side * 0.3, -1.6 + dy * 0.6);
         set(15 + h, hand.x * tuning.reachX[nPlayers - 1] + dx, hand.y * tuning.reachY + tuning.centerY + dy); set(19 + h, rig[15 + h][0], rig[15 + h][1]); set(13 + h, (rig[15 + h][0] + rig[11 + h][0]) / 2, (rig[15 + h][1] + rig[11 + h][1]) / 2 - 0.2);
-        set(25 + h, side * (knee ? 0.5 : 0.32), knee ? -1.5 : -2.7 + dy * 0.3); set(27 + h, side * (kick ? 1.5 : 0.35), kick ? -2.6 : knee ? -2.5 : -3.8); set(31 + h, rig[27 + h][0] + side * 0.25, rig[27 + h][1] - 0.1);
+        set(25 + h, side * (knee ? 0.5 : 0.32), knee ? -1.5 : -2.7 + dy * 0.3); set(27 + h, side * (keys.has('j') ? 0.95 : kick ? 1.5 : 0.35), keys.has('j') ? -3.8 : kick ? -2.6 : knee ? -2.5 : -3.8); set(31 + h, rig[27 + h][0] + side * 0.25, rig[27 + h][1] - 0.1);
       });
       pl.rig = rig;
     }

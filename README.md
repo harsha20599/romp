@@ -52,6 +52,9 @@ survive from round to round and the context is never re-created.
 - Two players = two trackers (pose.ts `pairUp`): the first worker keeps the GPU and takes seat 0's side of the picture, a
   second worker runs the lite model on the CPU for seat 1, each on its own copy of the camera track, sides overlapping
   in the middle. One model doing two people per frame measured 105 ms a frame on the Tab S7 (8 readings a second).
+- `src/reps.ts` — exercise detectors over the rig (running steps + cadence, jumping jacks incl. arms-only, woodchops, squat
+  depth), each checked against synthetic movement in `check.ts`. The exercise games (Sprint, Jack Attack, Forge,
+  Lumberjack) are built on them, and all enforce their own rests.
 - `src/physics.ts` — Rapier, fetched only by the games that use it (Goalie, Smash).
 
 The menus load ~80 KB of script (gzipped); the engine (~325 KB) and a game's code are fetched on its briefing screen.

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { assignSlots, frameClock, handInZone, isAir, isLow, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
+import { chopper, jacker, squatDepth, stepper } from './reps.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, variantOf, xpOf } from './meta.ts';
 
 // A body: shoulders 0.1 apart (camera frame, aspect 1) centred at cx, wrists wherever we put them.
@@ -162,6 +163,38 @@ assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
   }
   assert.ok(jitterPointer <= jitterRaw * 1.2 + 1e-9, `pointer wobbles more than the hand reading: ${jitterPointer} vs ${jitterRaw}`);
   assert.ok(past < 0.02, `pointer ran ${past} past the spot the hand stopped at`);
+}
+
+// ---- exercise detectors: a rep that does not count is the worst bug an exercise game can have --------------------------
+{
+  const body = (o: { knee?: [number, number]; wrists?: number; feet?: number } = {}) => {
+    const rig = Array.from({ length: 33 }, () => [0, 0, 1, 0, 0]);
+    rig[23] = [-0.3, -1.6, 1]; rig[24] = [0.3, -1.6, 1];
+    rig[25] = [-0.32, -2.75 + (o.knee?.[0] ?? 0), 1]; rig[26] = [0.32, -2.75 + (o.knee?.[1] ?? 0), 1];
+    rig[27] = [-(o.feet ?? 0.35), -3.8, 1]; rig[28] = [o.feet ?? 0.35, -3.8, 1];
+    rig[15] = [-0.9, o.wrists ?? -1.2, 1]; rig[16] = [0.9, o.wrists ?? -1.2, 1];
+    return rig;
+  };
+  // Running on the spot at 3 steps a second, knees coming up a modest 0.45 shoulder-widths: every step counts, none twice.
+  const run = stepper(); let steps = 0, pace = 0;
+  for (let f = 0; f < 60; f++) run(body(), f / 30); // standing first: it learns the legs
+  for (let f = 0; f < 300; f++) { const t = 2 + f / 30, phase = (t * 1.5) % 1, lift = Math.max(0, Math.sin(phase * 2 * Math.PI)) * 0.45, other = Math.max(0, Math.sin((phase + 0.5) * 2 * Math.PI)) * 0.45; const r = run(body({ knee: [lift, other] }), t); steps += r.steps; pace = r.cadence; }
+  assert.ok(Math.abs(steps - 30) <= 1, `10s at 3 steps/s counted ${steps}`);
+  assert.ok(pace > 2.4 && pace < 3.6, `cadence ${pace}`);
+  let idle = 0; const still = stepper(); for (let f = 0; f < 300; f++) idle += still(body({ knee: [Math.sin(f) * 0.04, 0] }), f / 30).steps; // jitter is not running
+  assert.equal(idle, 0);
+  // Ten jacks, arms only, then the same with feet apart: ten reps each, and only the second kind is "wide".
+  const jack = jacker(); let reps = 0, wides = 0;
+  for (const feet of [0.35, 0.9]) for (let f = 0; f < 300; f++) { const up = Math.sin((f / 30) * 2 * Math.PI) > 0; const r = jack(body({ wrists: up ? 1.6 : -1.2, feet: up ? feet : 0.35 })); if (r.rep) { reps++; if (r.wide) wides++; } }
+  assert.equal(reps, 20); assert.equal(wides, 10);
+  // A chop from top-left to bottom-right in 0.3s is one chop toward the right; a slow drift down the same path is none.
+  const chop = chopper(); let chops: number[] = [];
+  for (let f = 0; f <= 9; f++) { const k = f / 9, r = chop([{ x: -0.6 + 1.2 * k, y: 0.8 - 1.4 * k, vy: 0, seen: true }], f / 30); if (r) chops.push(r.dir); }
+  assert.deepEqual(chops, [1]);
+  const lazy = chopper(); chops = [];
+  for (let f = 0; f <= 60; f++) { const k = f / 60, r = lazy([{ x: -0.6 + 1.2 * k, y: 0.8 - 1.4 * k, vy: 0, seen: true }], f / 30 * 1.2); if (r) chops.push(r.dir); }
+  assert.deepEqual(chops, []);
+  assert.equal(squatDepth(0), 0); assert.equal(squatDepth(-0.85), 1); assert.ok(squatDepth(-0.6) > 0.5 && squatDepth(-0.6) < 0.6);
 }
 
 console.log('ok');

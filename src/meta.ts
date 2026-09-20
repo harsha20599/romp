@@ -5,7 +5,7 @@ import { DAY_GOAL, summary, type Session } from './stats.ts';
 // Score needed for 1, 2 and 3 stars at stage 1. Guesses until real scores come in — this table is the tuning knob.
 export const STARS: Record<string, [number, number, number]> = {
   slice: [40, 80, 130], run: [400, 900, 1500], jab: [20, 40, 65], beat: [25, 50, 80], goalie: [8, 16, 26],
-  keepy: [40, 75, 115], leaks: [18, 32, 48],
+  keepy: [40, 75, 115], leaks: [18, 32, 48], sprint: [150, 240, 320], jacks: [40, 75, 110], forge: [40, 70, 100], lumber: [15, 28, 42],
   smash: [15, 30, 45], rocket: [40, 80, 130], freeze: [120, 220, 330], wipe: [120, 220, 320], shapeup: [300, 480, 640],
 };
 export const STAGES = 5;
