@@ -152,7 +152,17 @@ function HandCursor() {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const fistMode = pressMode() === 'fist';
-    let raf = 0, target: HTMLButtonElement | null = null, since = 0, last = 0, which = 1, x = NaN, y = NaN, wasClosed = false, shownAt = 0;
+    let raf = 0, target: HTMLButtonElement | null = null, since = 0, last = 0, which = 1, x = NaN, y = NaN, shownAt = 0;
+    // Pressing with a fist, done properly:
+    //  · Closing the hand MOVES it — the palm point is built from the wrist and knuckles, and knuckles travel as fingers
+    //    curl — so the pointer used to lurch just before the press, sometimes onto the neighbouring button. The pointer
+    //    therefore remembers where it has been, and the moment the fingers start to curl it is held where it was a
+    //    fifth of a second earlier — before the hand began to close. The press lands there too.
+    //  · One fist is one press. The pointer must see an OPEN hand for a moment before a fist can press again (`armed`),
+    //    so a fist that is still closed when the next screen appears, or that the hand model loses and finds again,
+    //    cannot press whatever happens to be underneath.
+    const trail: { t: number; x: number; y: number; target: HTMLButtonElement | null }[] = [];
+    let armed = false, openSince = 0, holdUntil = 0, pin = { x: 0, y: 0, target: null as HTMLButtonElement | null }, curlWas = 9, readAt = 0;
     grip.want = fistMode;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
@@ -168,6 +178,15 @@ function HandCursor() {
       const at = predict(hand, undefined, POINTER_LEAD), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
       y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
+      // A new reading from the hand model: are the fingers starting to curl? (a sharp drop, or already past "open")
+      if (fistMode && grip.seenAt !== readAt) {
+        readAt = grip.seenAt;
+        if ((curlWas - grip.curl > 0.22 || grip.curl < tuning.openAt) && now > holdUntil) { pin = trail.find((q) => now - q.t <= 200) ?? { x, y, target }; holdUntil = now + 420; }
+        curlWas = grip.curl;
+      }
+      const holding = now < holdUntil || (fistMode && grip.closed && performance.now() - grip.seenAt < BLIND_AFTER);
+      if (holding) { x = pin.x; y = pin.y; } // stay put while the hand closes, and for as long as it is a fist
+      else { trail.push({ t: now, x, y, target }); while (trail.length && now - trail[0].t > 450) trail.shift(); }
       el.current!.style.transform = `translate(${x}px, ${y}px)`;
 
       const r = target?.isConnected ? target.getBoundingClientRect() : null;
@@ -184,8 +203,12 @@ function HandCursor() {
       const sees = fistMode && performance.now() - grip.seenAt < BLIND_AFTER, closed = sees && grip.closed;
       el.current!.classList.toggle('closed', closed);
       el.current!.classList.toggle('fist', sees);
-      if (closed && !wasClosed && target) target.click();
-      wasClosed = closed;
+      if (sees && !grip.closed) { openSince ||= now; if (now - openSince > 180) armed = true; } else openSince = 0;
+      if (closed && armed) {
+        armed = false;
+        const aim = pin.target?.isConnected && now < holdUntil + 400 ? pin.target : target; // where the pointer was before the hand began to close
+        if (aim && !aim.disabled) aim.click();
+      }
       // Dwell: only in "hold" mode, or while the hand model is blind (and then only after giving it time to find the hand).
       const dwell = !fistMode || (!sees && now - shownAt > BLIND_AFTER);
       const p = dwell && target ? Math.min(1, Math.max(0, (now - since) / DWELL)) : 0;
