@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Romp clock</title>
+<style>html,body{margin:0;height:100%;background:#000;color:#fff;font:700 22vw/1 ui-monospace,monospace;display:grid;place-items:center;overflow:hidden}#bar{position:fixed;top:0;bottom:70%;width:4vw;background:#3de1ff}#t{font-variant-numeric:tabular-nums}small{position:fixed;bottom:2vh;font:16px system-ui;opacity:.6}</style>
+<div id="bar"></div><div id="t">0.000</div>
+<small>Mirror the tablet to the TV (not DeX), then photograph both screens in one shot. The difference between the two numbers is the TV chain's delay.</small>
+<script>
+// A millisecond clock and a sweeping bar, redrawn every frame. Two screens showing the same page show different
+// numbers in the same photograph — the difference is how far one screen runs behind the other.
+const t = document.getElementById('t'), bar = document.getElementById('bar');
+requestAnimationFrame(function f(now) { t.textContent = ((now / 1000) % 100).toFixed(3); bar.style.left = ((now % 1000) / 10) * 0.96 + 'vw'; requestAnimationFrame(f); });
+</script>
