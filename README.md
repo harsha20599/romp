@@ -10,14 +10,21 @@ npm run check    # input-maths + streak asserts, then tsc
 
 Two ways in, both serving the same `dist/` — run `npm run build` to publish a change, nothing restarts:
 
-- **Tailscale (preferred): https://mayjuneserver.taild23e3.ts.net:8445** — `tailscale serve` hands out the folder over real HTTPS,
-  tailnet-only. The camera just works. The tablet needs the Tailscale app, signed in.
+- **Tailscale (preferred): https://mayjuneserver.taild23e3.ts.net:8445** — `tailscale serve --https 8445` proxies to
+  `romp-live.service` (`node serve.mjs 5192`, loopback): the same `dist/` over real HTTPS, tailnet-only, plus `POST /report`
+  so the tablet's own measurements land in `reports/`. The camera just works. The tablet needs the Tailscale app, signed in.
   Off switch: `tailscale serve --https=8445 off`.
 - **LAN: http://192.168.0.100:5180** — `systemctl --user status romp`. Plain http, so Chrome blocks the
   camera until, once on the tablet, `chrome://flags/#unsafely-treat-insecure-origin-as-secure` lists
   that address and is Enabled.
 
 Tuning knobs: `tuning` in `src/pose.ts`.
+
+**Set-up that matters more than any code** (measured 2026-09-20): the TV must be in **Game mode** for the tablet's HDMI
+input, motion smoothing off — outside it the TV alone added ~100 ms. Use **DeX**, not mirroring. Then run
+Home → Tracking → Delay → **Measure** once per screen/cable change; prediction uses the stored figure. `/clock.html`
+(photograph tablet and TV together) and `/bench.html` (camera, model and latency on the device) are there for the next hunt;
+`tools/tablet-diag.sh` reads the tablet over adb.
 
 ## Test builds and field numbers
 
