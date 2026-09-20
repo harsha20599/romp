@@ -40,7 +40,7 @@ export const tuning = {
   // Delay the page cannot see: the camera's own pipeline before a frame reaches us, plus the screen's after we draw.
   // Measured on the Tab S7 (flash test, 2026-09-20): ~90ms on its own panel, ~120ms on the TV in Game mode, ~185ms
   // on the TV outside it. "Measure delay" on the Tracking screen re-measures it for whatever screen is plugged in.
-  unseen: Math.max(0, Math.min(300, Number(stored('romp.unseen') ?? 120))) / 1000,
+  unseen: Math.max(0, Math.min(300, Number(stored('romp.unseen') ?? 100))) / 1000,
   maxLead: 0.22, // never predict further than this, however stale the reading
   accCut: 2, // cutoff (Hz) on the acceleration estimate
   brakeFrom: 4, // deceleration (zone-units/s²) below which a hand is not "braking" — that much is just noise in the estimate
