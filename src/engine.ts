@@ -381,6 +381,8 @@ export function glowLook(hex: string, strength = 1) {
   m.update();
   return own(m);
 }
+// One glow material, many colours and strengths: set on the entity, the material stays shared.
+export const glowAs = (e: Entity, hex: string, power = 1) => { for (const mi of instancesOf(e)) { mi.setParameter('uGlow', linear(hex)); mi.setParameter('uPower', power); } };
 
 // The light a fast hand leaves behind: white-hot at the hand, the player's colour along it, nothing at the tail.
 export function trailLook(hex: string) {
@@ -469,6 +471,18 @@ const PLACES = {
     for (int i = 0; i < 3; i++) { float k = float(i), den = 5.0 + k * 4.0, x = uv.x * den + k * 1.7, id = floor(x), w = 0.16 + 0.12 * hash(vec2(id, k)), trunk = smoothstep(w, w - 0.04, abs(fract(x) - 0.5)) * step(0.35, hash(vec2(id, k + 5.0)));
       c = mix(c, mix(vec3(0.30, 0.42, 0.36), vec3(0.10, 0.12, 0.10), k * 0.5) * (0.8 + 0.2 * noise(vec2(x * 3.0, uv.y * 30.0))), trunk * (0.45 + 0.27 * k)); }
     c += vec3(1.0, 0.92, 0.65) * 0.22 * pow(max(0.0, sin(p.x * 3.0 - uv.y * 2.2 + 1.0)), 5.0) * uv.y; c = mix(c, vec3(0.80, 0.86, 0.78), smoothstep(0.22, 0.0, uv.y) * 0.55); c *= 0.78;`,
+  // Pulse: a neon tunnel flying at you in time — rings pass on the beat (uDrive = beats into the song), spokes run down
+  // the walls, the far end flares on every beat; uMood (0..1) turns it from cyan/magenta to gold: fever.
+  tunnel: `vec2 q = p - vec2(0.0, 0.13); float r = pow(pow(abs(q.x) * 0.6, 4.0) + pow(abs(q.y), 4.0), 0.25), z = 0.42 / (r + 0.03), beat = exp(-fract(uDrive) * 4.5);
+    // Thin, bright lines on near-black: neon is contrast. One bold ring every two beats, fine ones between, spokes down the walls.
+    float ring = smoothstep(0.462, 0.5, abs(fract(z * 0.5 - uDrive * 0.5) - 0.5)), thin = smoothstep(0.47, 0.5, abs(fract(z * 2.0 - uDrive * 2.0) - 0.5));
+    float ang = atan(q.y, q.x * 0.6) / 6.2832, spoke = smoothstep(0.474, 0.5, abs(fract(ang * 16.0) - 0.5)), near = smoothstep(0.04, 0.95, r);
+    vec3 cool = mix(vec3(0.0, 0.85, 1.0), vec3(1.0, 0.08, 0.75), 0.5 + 0.5 * sin(z * 0.55 - t * 0.35 + ang * 6.2832)), hot = mix(vec3(1.0, 0.72, 0.1), vec3(1.0, 0.95, 0.75), 0.5 + 0.5 * sin(z * 0.8 - t));
+    vec3 neon = mix(cool, hot, uMood), c = vec3(0.012, 0.006, 0.035) + neon * 0.018 * near;
+    c += neon * (ring * (0.95 + 0.9 * beat) + thin * 0.10 + spoke * (0.10 + 0.5 * ring)) * (0.25 + 0.75 * near);
+    c += neon * ring * 0.10 * near; // a little of each ring's light spills onto the wall around it
+    c += neon * (0.05 + 0.40 * beat) / (1.0 + 90.0 * r * r) + vec3(1.0) * beat * 0.22 / (1.0 + 500.0 * r * r); // the far end breathes with the kick
+    c *= 0.96 + 0.04 * sin(uv.y * 540.0);`,
   // Wipe: what is under the grime — clean white tiles with a slow glint crossing them.
   tiles: `vec2 g = fract(uv * vec2(16.0, 9.0)); float grout = smoothstep(0.0, 0.05, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
     vec3 c = mix(vec3(0.35, 0.45, 0.55), vec3(0.78, 0.88, 0.95), grout) * (0.75 + 0.1 * hash(floor(uv * vec2(16.0, 9.0))));
@@ -524,14 +538,14 @@ const everyFrame: (() => void)[] = [];
 const timed: ShaderMaterial[] = []; // materials that want the clock, once a frame
 // `bodies: true` says the game shows its players' whole bodies, so under the Mirror look the room takes the place's place.
 export function backdrop(scene: Scene, place: Place, bodies = false) {
-  if (bodies && mirrorOn()) return Object.assign(mirror(scene, place), { drive: (_: number) => {} });
+  if (bodies && mirrorOn()) return Object.assign(mirror(scene, place), { drive: (_: number) => {}, mood: (_: number) => {} });
   const m = own(new ShaderMaterial({
     uniqueName: `romp-place-${place}`,
     attributes: { vertex_position: SEMANTIC_POSITION },
     vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vUv;
       void main(void) { vUv = vertex_position.xy / vec2(${W}.0, ${H}.0) + 0.5; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
     fragmentGLSL: `#include "gammaPS"
-      varying vec2 vUv; uniform float uTime; uniform float uDrive;
+      varying vec2 vUv; uniform float uTime; uniform float uDrive; uniform float uMood;
       float hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
       float noise(vec2 q) { vec2 i = floor(q), f = fract(q); f = f * f * (3.0 - 2.0 * f); return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
       float fbm(vec2 q) { return noise(q) * 0.5 + noise(q * 2.0 + 3.1) * 0.3 + noise(q * 4.0 + 1.7) * 0.2; }
@@ -542,10 +556,10 @@ export function backdrop(scene: Scene, place: Place, bodies = false) {
         gl_FragColor = vec4(gammaCorrectOutput(max(c, 0.0)), 1.0);
       }`,
   }));
-  m.setParameter('uTime', 0); m.setParameter('uDrive', 0); m.update();
+  m.setParameter('uTime', 0); m.setParameter('uDrive', 0); m.setParameter('uMood', 0); m.update();
   timed.push(m);
   const e = node(scene.root, shapes.quad(W, H), m, [0, 0, -20]);
-  return Object.assign(e, { drive: (v: number) => m.setParameter('uDrive', v) }); // what the game feeds its world: distance run, heat built…
+  return Object.assign(e, { drive: (v: number) => m.setParameter('uDrive', v), mood: (v: number) => m.setParameter('uMood', v) }); // what the game feeds its world: distance run, heat built, the beat…
 }
 
 // A strip of triangles rewritten every frame (the hand ribbons). Each vertex knows how far along the strip it is (u)

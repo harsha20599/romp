@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { assignSlots, frameClock, handInZone, isAir, isLow, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
+import { chart } from './chart.ts';
+import { SONGS } from './song.ts';
 import { chopper, jacker, squatDepth, stepper } from './reps.ts';
 import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, variantOf, xpOf } from './meta.ts';
 
@@ -195,6 +197,20 @@ assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
   for (let f = 0; f <= 60; f++) { const k = f / 60, r = lazy([{ x: -0.6 + 1.2 * k, y: 0.8 - 1.4 * k, vy: 0, seen: true }], f / 30 * 1.2); if (r) chops.push(r.dir); }
   assert.deepEqual(chops, []);
   assert.equal(squatDepth(0), 0); assert.equal(squatDepth(-0.85), 1); assert.ok(squatDepth(-0.6) > 0.5 && squatDepth(-0.6) < 0.6);
+}
+
+// ---- Pulse: charts are made from the songs, and must be playable by a body ------------------------------------------------
+for (const song of SONGS) {
+  let fewer = 0;
+  for (let stage = 1; stage <= 5; stage++) {
+    const { notes, seconds } = chart(song, stage), hits = notes.filter((n) => n.kind !== 'duck' && n.kind !== 'lean');
+    assert.ok(seconds > 55 && seconds < 95, `${song.name} lasts ${seconds}s`);
+    assert.ok(hits.length > fewer, `${song.name} stage ${stage}: ${hits.length} notes, not more than stage ${stage - 1}`); fewer = hits.length - 1;
+    assert.ok(notes.every((n, i) => !i || n.t >= notes[i - 1].t), 'in time order');
+    assert.ok(hits.every((n) => Math.abs(n.x) <= 0.8 && n.y >= -0.31 && n.y <= 0.76 && Math.abs(n.x2) <= 0.8), 'within reach');
+    for (const h of [0, 1]) { const mine = hits.filter((n) => n.hand === h); assert.ok(mine.every((n, i) => !i || n.t - (mine[i - 1].t + mine[i - 1].len) > 0.2), `${song.name} stage ${stage}: a hand is never asked twice inside 0.2s`); assert.ok(mine.length > hits.length * 0.3, 'both hands share the work'); }
+    assert.ok(notes.some((n) => n.kind === 'duck'), 'the break has gates'); assert.equal(notes.some((n) => n.kind === 'rail'), stage >= 2);
+  }
 }
 
 console.log('ok');

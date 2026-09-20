@@ -118,12 +118,13 @@ export type StageHand = { p: number; x: number; y: number; px: number; py: numbe
 // `map` places the zones; the default is the orthographic stage split into n columns.
 export type HandMap = { cx: (p: number) => number; hw: number; hh: number; cy?: number };
 // `swing`: hand speed (stage units/s) that earns a whoosh the moment it is reached; 0 = silent hands.
-export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw: zoneHalf(n), hh: H / 2 }, swing = 6) {
+// `tones`: a colour per hand ([left, right]) instead of one per player — for games where which hand matters.
+export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX(n, p), hw: zoneHalf(n), hh: H / 2 }, swing = 6, tones?: string[]) {
   // Glass hands: a bead of light with a halo in the player's colour, and a trail that is brightest at the hand and
   // fades to nothing — light, not paint, so fast hands never hide what they are about to hit.
   const bead = shapes.quad(2, 2);
   const all = Array.from({ length: n * 2 }, (_, i) => {
-    const hex = PLAYER_COLORS[i >> 1], trail = ribbon(scene.root, TRAIL, trailLook(hex)), cursor: Entity = node(scene.root, bead, glowLook(hex));
+    const hex = tones ? tones[i & 1] : PLAYER_COLORS[i >> 1], trail = ribbon(scene.root, TRAIL, trailLook(hex)), cursor: Entity = node(scene.root, bead, glowLook(hex));
     cursor.setLocalScale(1, 1, 1);
     const pts = new Float32Array(TRAIL * 2);
     return { trail, cursor, pts, age: new Float32Array(TRAIL), armed: true, state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false, pts } as StageHand };

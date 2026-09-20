@@ -12,6 +12,7 @@ import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, play, say, s
 const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('./games/run.ts')), Jab = play(() => import('./games/jab.ts')), Beat = play(() => import('./games/beat.ts'));
 const ShapeUp = play(() => import('./games/shapeup.ts')), Goalie = play(() => import('./games/goalie.ts')), Smash = play(() => import('./games/smash.ts'));
 const Sprint = play(() => import('./games/sprint.ts')), Forge = play(() => import('./games/forge.ts')), Jacks = play(() => import('./games/jacks.ts')), Lumber = play(() => import('./games/lumber.ts'));
+const Pulse = play(() => import('./games/pulse.ts'));
 const Leaks = play(() => import('./games/leaks.ts')), Keepy = play(() => import('./games/keepy.ts'));
 const Rocket = play(() => import('./games/rocket.ts')), Freeze = play(() => import('./games/freeze.ts')), Wipe = play(() => import('./games/wipe.ts'));
 
@@ -21,6 +22,8 @@ type Game = { id: string; name: string; icon: string; tone: [string, string]; bl
 // The library. A new game = one component + one row here (+ its star goals in meta.ts). maxPlayers 2 only for
 // compact-footprint games (PLAN §3); a wide game is still playable by two through "Take turns".
 const GAMES: Game[] = [
+  { id: 'pulse', name: 'Pulse', icon: '🎧', tone: ['#22d3ee', '#c026d3'], blurb: 'Hit the music. A neon tunnel, three songs.', how: 'Notes fly down the tunnel in time with the song. Cyan is your left hand, pink your right. Strike an orb as it lands on its ring. Slash a comet the way it points. Keep your hand on a ribbon to ride it. In the break, duck the bar and lean away from the wall.', maxPlayers: 2, Play: Pulse, team: true,
+    modes: [{ id: '', name: 'Neon Drive', blurb: '112 bpm · the one to learn on' }, { id: 'afterglow', name: 'Afterglow', blurb: '124 bpm · quick doubles' }, { id: 'hyperline', name: 'Hyperline', blurb: '138 bpm · fast and relentless' }] },
   { id: 'run', name: 'Run', icon: '🏃', tone: ['#ff8a3d', '#ff3d6e'], blurb: 'Endless runner. Lean, jump, duck.', how: 'Lean left or right to change lane. Jump the barrels and duck the beams. Never run into a crate stack. Grab coins and power-ups in the lanes.', maxPlayers: 2, Play: Run },
   { id: 'slice', name: 'Slice', icon: '🍉', tone: ['#3ddc84', '#0e9aa7'], blurb: 'Cut the fruit, dodge the bombs.', how: 'Swipe fast through the fruit. One swing through three or more pays extra, and so does a really hard cut. Glowing bananas are power-ups. Never touch a bomb.', maxPlayers: 2, Play: Slice, team: true,
     modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, power-ups, bombs cost points' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Drop a fruit or hit a bomb and lose one' }, { id: 'zen', name: 'Zen', blurb: '90 calm seconds, no bombs. A good cool-down' }] },

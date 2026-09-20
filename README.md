@@ -55,6 +55,10 @@ survive from round to round and the context is never re-created.
 - `src/reps.ts` — exercise detectors over the rig (running steps + cadence, jumping jacks incl. arms-only, woodchops, squat
   depth), each checked against synthetic movement in `check.ts`. The exercise games (Sprint, Jack Attack, Forge,
   Lumberjack) are built on them, and all enforce their own rests.
+- Pulse (the rhythm game): `src/song.ts` holds the songs as data and a small synthesiser that plays them (kick, snare,
+  hats, bass, pad, arp, lead; sidechain pump, tempo delay, generated reverb) — original music, nothing downloaded or
+  licensed; `src/chart.ts` builds each stage's chart from the song's own events (checked for playability in `check.ts`);
+  `src/games/pulse.ts` is the game; the `tunnel` backdrop is driven by the beat. A new song = one entry in `SONGS` + a mode row.
 - `src/physics.ts` — Rapier, fetched only by the games that use it (Goalie, Smash).
 
 The menus load ~80 KB of script (gzipped); the engine (~325 KB) and a game's code are fetched on its briefing screen.
