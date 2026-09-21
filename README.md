@@ -75,6 +75,20 @@ after every round (`p50/p95/p99/worst`, shaders built mid-round), and, only when
 screen, a tape of raw landmarks for filter tuning. They land in `reports/` (git-ignored). Never camera pictures. On the
 live static servers the POST simply fails and nothing is sent.
 
+## Finding 3D models
+
+`node tools/models.mjs` is how models are found and brought in — by a person or by an agent. `search "<thing>"` queries
+Poly Pizza (low-poly; hosts Quaternius' and Google Poly's libraries model by model), Kenney's CC0 packs (the house
+style — prefer them), Poly Haven and Sketchfab, ranks them for this project (CC0 first, Kenney/Quaternius first, fewer
+triangles first, fetchable first) and writes a numbered **contact sheet** PNG of thumbnails to
+`~/.cache/wt-scratch/romp-models/` — look at it before choosing. `pack <kenney-pack>` lists what is inside a Kenney pack;
+`get <ref> --as <dir/name>` downloads, vets (triangles, size, materials, external textures), copies into
+`public/assets/`, records source/author/licence/hash in `public/assets/models.json` and adds the credit line to
+`public/assets/CREDITS.md`. Only CC0 and CC-BY are let in. For portals that block plain requests, `MODELS_FETCH=webfetch`
+reads pages through Watchtower's browser layer (`~/watchtower/bin/webfetch`: real Chromium, stealth). Two import rules keep
+kits looking like one world (both in `engine.ts`): models are made matte on load, and off-palette kits are repainted by
+material name (`REPAINT`).
+
 ## Assets and sound
 
 All models, sound effects and the announcer are CC0 — see `CREDITS.md`. Sounds are grouped into families by file
