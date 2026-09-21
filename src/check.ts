@@ -203,13 +203,20 @@ assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
 for (const song of SONGS) {
   let fewer = 0;
   for (let stage = 1; stage <= 5; stage++) {
-    const { notes, seconds } = chart(song, stage), hits = notes.filter((n) => n.kind !== 'duck' && n.kind !== 'lean');
+    const { notes, seconds } = chart(song, stage), moves = notes.filter((n) => n.kind !== 'duck' && n.kind !== 'lean');
     assert.ok(seconds > 55 && seconds < 95, `${song.name} lasts ${seconds}s`);
-    assert.ok(hits.length > fewer, `${song.name} stage ${stage}: ${hits.length} notes, not more than stage ${stage - 1}`); fewer = hits.length - 1;
+    assert.ok(moves.length > fewer, `${song.name} stage ${stage}: ${moves.length} notes, not more than stage ${stage - 1}`); fewer = moves.length - 1;
     assert.ok(notes.every((n, i) => !i || n.t >= notes[i - 1].t), 'in time order');
-    assert.ok(hits.every((n) => Math.abs(n.x) <= 0.8 && n.y >= -0.31 && n.y <= 0.76 && Math.abs(n.x2) <= 0.8), 'within reach');
-    for (const h of [0, 1]) { const mine = hits.filter((n) => n.hand === h); assert.ok(mine.every((n, i) => !i || n.t - (mine[i - 1].t + mine[i - 1].len) > 0.2), `${song.name} stage ${stage}: a hand is never asked twice inside 0.2s`); assert.ok(mine.length > hits.length * 0.3, 'both hands share the work'); }
-    assert.ok(notes.some((n) => n.kind === 'duck'), 'the break has gates'); assert.equal(notes.some((n) => n.kind === 'rail'), stage >= 2);
+    assert.ok(moves.every((n) => Math.abs(Math.hypot(n.dx, n.dy) - 1) < 1e-9 || (n.dx === 0 && n.dy === 0)), 'a direction is a unit vector, or none');
+    for (const h of [0, 1]) {
+      const mine = moves.filter((n) => n.hand === h || n.hand === 2);
+      assert.ok(mine.every((n, i) => !i || n.t - (mine[i - 1].t + mine[i - 1].len) > 0.2), `${song.name} stage ${stage}: a hand is never asked twice inside 0.2s`);
+      assert.ok(mine.length > moves.length * 0.3, 'both hands share the work');
+      // The same sideways swing twice running would need an unseen return stroke in between: only allowed with room for it.
+      const side = mine.filter((n) => n.kind === 'swipe' && n.dx !== 0 && n.hand === h);
+      assert.ok(side.every((n, i) => !i || n.dx !== side[i - 1].dx || n.t - side[i - 1].t > 0.9), `${song.name} stage ${stage}: sideways swipes alternate`);
+    }
+    assert.ok(notes.some((n) => n.kind === 'duck'), 'the break has gates'); assert.equal(notes.some((n) => n.kind === 'hold'), stage >= 2);
   }
 }
 
