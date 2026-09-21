@@ -127,7 +127,7 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
     const hex = tones ? tones[i & 1] : PLAYER_COLORS[i >> 1], trail = ribbon(scene.root, TRAIL, trailLook(hex)), cursor: Entity = node(scene.root, bead, glowLook(hex));
     cursor.setLocalScale(1, 1, 1);
     const pts = new Float32Array(TRAIL * 2);
-    return { trail, cursor, pts, age: new Float32Array(TRAIL), armed: true, state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false, pts } as StageHand };
+    return { trail, cursor, pts, age: new Float32Array(TRAIL), armed: true, pace: 0, state: { p: i >> 1, x: 0, y: 0, px: 0, py: 0, speed: 0, on: false, pts } as StageHand };
   });
   const update = (dt: number) =>
     all.map((own, i) => {
@@ -139,13 +139,17 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
       // The camera updates ~30x a second, the screen 60x: glide toward the latest reading so motion is continuous,
       // and take speed from the tracker (measured at camera rate) — never from per-frame screen deltas.
       // …and the reading is already old when it arrives, so aim at where the hand is by now (pose.ts predict).
-      const at = predict(hand), tx = map.cx(s.p) + at.x * map.hw, ty = (map.cy ?? 0) + at.y * map.hh, k = was ? 1 - Math.exp(-dt * 45) : 1;
+      // How hard to chase the tracker depends on how far behind we are: close to it (a still or slow hand) the dot
+      // moves gently, so tracker noise — and the 20-odd readings a second arriving as little steps — never shows;
+      // far from it (a real swing) it goes almost at once. Steady at rest, immediate in motion.
+      const at = predict(hand), tx = map.cx(s.p) + at.x * map.hw, ty = (map.cy ?? 0) + at.y * map.hh, far = was ? Math.hypot(tx - s.x, ty - s.y) : 0;
+      const k = was ? 1 - Math.exp(-dt * (11 + 36 * Math.min(1, far / 1.1))) : 1;
       s.px = was ? s.x : tx;
       s.py = was ? s.y : ty;
       s.x = s.px + (tx - s.px) * k;
       s.y = s.py + (ty - s.py) * k;
       cursor.setLocalPosition(s.x, s.y, 1);
-      const swell = 0.95 + Math.min(0.7, s.speed * 0.04); // a fast hand burns brighter
+      const swell = 0.95 + Math.min(0.7, own.pace * 0.04); // a fast hand burns brighter
       cursor.setLocalScale(swell, swell, 1);
       if (was) { pts.copyWithin(2, 0, (TRAIL - 1) * 2); age.copyWithin(1, 0, TRAIL - 1); for (let k = 1; k < TRAIL; k++) age[k] += dt; }
       else for (let k = 0; k < TRAIL; k++) { pts.set([s.x, s.y], k * 2); age[k] = k ? 1 : 0; }
@@ -156,13 +160,16 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
       // (net distance, so jitter around a still hand reads as nothing) and believe whichever is higher.
       const across = Math.hypot(pts[0] - pts[2 * SPAN], pts[1] - pts[2 * SPAN + 1]) / Math.max(0.03, age[SPAN]);
       s.speed = Math.max(Math.hypot(hand.vx * map.hw, hand.vy * map.hh), age[SPAN] < 0.25 ? across : 0);
+      own.pace += (s.speed - own.pace) * Math.min(1, dt * 8); // the trail's width follows a calmed speed, or it flickers
       if (swing && own.armed && s.speed > swing) { own.armed = false; whoosh(Math.min(1, s.speed / swing / 3)); }
       else if (s.speed < swing * 0.5) own.armed = true; // one whoosh per swing: re-arms only once the hand has slowed right down
       const pos = trail.positions;
       for (let k = 0; k < TRAIL; k++) {
-        const a = Math.max(k - 1, 0) * 2, b = Math.min(k + 1, TRAIL - 1) * 2;
-        const dx = pts[b] - pts[a], dy = pts[b + 1] - pts[a + 1], len = Math.hypot(dx, dy) || 1, w = (0.2 + Math.min(0.22, s.speed * 0.018)) * (1 - (k / TRAIL) * 0.85);
-        pos.set([pts[2 * k] - (dy / len) * w, pts[2 * k + 1] + (dx / len) * w, 0.9, pts[2 * k] + (dy / len) * w, pts[2 * k + 1] - (dx / len) * w, 0.9], k * 6);
+        // Drawn through a rounded copy of the path (each point eased toward its neighbours), so a noisy sample is a
+        // gentle bend in the ribbon, not a kink; hit-testing (swept) still uses the true points.
+        const a = Math.max(k - 1, 0) * 2, b = Math.min(k + 1, TRAIL - 1) * 2, c = 2 * k, px = k && k < TRAIL - 1 ? pts[a] * 0.25 + pts[c] * 0.5 + pts[b] * 0.25 : pts[c], py = k && k < TRAIL - 1 ? pts[a + 1] * 0.25 + pts[c + 1] * 0.5 + pts[b + 1] * 0.25 : pts[c + 1];
+        const dx = pts[b] - pts[a], dy = pts[b + 1] - pts[a + 1], len = Math.hypot(dx, dy), w = len < 0.02 ? 0 : (0.2 + Math.min(0.22, own.pace * 0.018)) * (1 - (k / TRAIL) * 0.85);
+        pos.set([px - (dy / (len || 1)) * w, py + (dx / (len || 1)) * w, 0.9, px + (dy / (len || 1)) * w, py - (dx / (len || 1)) * w, 0.9], k * 6);
       }
       trail.commit();
       return s;

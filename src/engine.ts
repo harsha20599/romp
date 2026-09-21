@@ -227,10 +227,14 @@ export function clippable(e: Entity, flesh: string) {
   }
   for (const mi of instancesOf(e)) mi.setParameter('uClip', [0, 0, 0, 1]);
 }
-const clip = new Float32Array(4);
+// Each cut thing keeps its OWN plane. (It used to be one shared array: a mesh instance stores the array it is given,
+// not a copy, so every half of every fruit was cut by whichever plane was written last — a half drawn whole, a half
+// cut away to nothing, now and then a right one by luck.)
+const planes = new WeakMap<Entity, { plane: Float32Array; parts: MeshInstance[] }>();
 export function setClip(e: Entity, nx: number, ny: number, nz: number, w: number) {
-  clip[0] = nx; clip[1] = ny; clip[2] = nz; clip[3] = w;
-  for (const mi of instancesOf(e)) mi.setParameter('uClip', clip);
+  let own = planes.get(e);
+  if (!own) { planes.set(e, (own = { plane: new Float32Array(4), parts: instancesOf(e) })); for (const mi of own.parts) mi.setParameter('uClip', own.plane); }
+  own.plane[0] = nx; own.plane[1] = ny; own.plane[2] = nz; own.plane[3] = w;
 }
 
 // ---- many small things, one draw call --------------------------------------------------------------------------------
@@ -343,24 +347,32 @@ export function bodyLook(hex: string) {
         vec2 a = J(ia), b = J(ib), ab = b - a; float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0);
         return length(p - a - ab * h) - mix(ra, rb, h) + (1.0 - step(0.4, min(uSeen[ia], uSeen[ib]))) * 9.0;
       }
-      float melt(float a, float b) { float k = 0.085, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+      float limbAt(vec2 p, vec2 a, vec2 b, float ra, float rb) { vec2 ab = b - a; float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0); return length(p - a - ab * h) - mix(ra, rb, h); }
+      float wide(float a, float b) { float k = 0.14, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+      float melt(float a, float b) { float k = 0.045, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
       void main(void) {
         vec2 p = vAt, neck = (J(1) + J(2)) * 0.5, hips = (J(7) + J(8)) * 0.5, head = J(0) + vec2(0.0, 0.06);
         float tips = 0.0; // the parts that play
         for (int i = 0; i < 2; i++) { tips += exp(-length(p - mix(J(5 + i), J(15 + i), 0.6)) * 5.5) * step(0.4, uSeen[5 + i]); tips += exp(-length(p - mix(J(11 + i), J(13 + i), 0.6)) * 5.5) * step(0.4, uSeen[11 + i]); }
         tips *= 0.85 + 0.15 * sin(uTime * 6.0);
         if (uTips > 0.5) { gl_FragColor = vec4(gammaCorrectOutput(mix(uTint * 1.5, vec3(1.0), smoothstep(0.25, 0.9, tips))), min(1.0, tips * 1.1)); return; }
-        float d = length(p - head) - 0.43;
-        d = melt(d, length(p - mix(neck, head, 0.5)) - 0.16);
-        { vec2 ab = hips - neck; float h = clamp(dot(p - neck, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0); d = melt(d, length(p - neck - ab * h) - mix(0.50, 0.40, h)); } // torso
-        d = melt(d, limb(p, 1, 2, 0.22, 0.22)); d = melt(d, limb(p, 7, 8, 0.26, 0.26));
-        d = melt(d, limb(p, 1, 3, 0.19, 0.15)); d = melt(d, limb(p, 3, 5, 0.15, 0.11)); d = melt(d, limb(p, 5, 15, 0.12, 0.13));
-        d = melt(d, limb(p, 2, 4, 0.19, 0.15)); d = melt(d, limb(p, 4, 6, 0.15, 0.11)); d = melt(d, limb(p, 6, 16, 0.12, 0.13));
-        d = melt(d, limb(p, 7, 9, 0.27, 0.19)); d = melt(d, limb(p, 9, 11, 0.18, 0.12)); d = melt(d, limb(p, 11, 13, 0.13, 0.11));
-        d = melt(d, limb(p, 8, 10, 0.27, 0.19)); d = melt(d, limb(p, 10, 12, 0.18, 0.12)); d = melt(d, limb(p, 12, 14, 0.13, 0.11));
-        float body = smoothstep(0.02, -0.02, d), line = smoothstep(0.10, 0.06, abs(d - 0.03)), glow = exp(-max(d, 0.0) * 4.2) * 0.55;
+        // A human outline, in real proportions (shoulder-width ≈ 35cm): a head a fifth of a shoulder-width across each
+        // way from its middle, a neck, a chest that narrows to a waist and widens to hips, arms and legs that taper
+        // the way muscle does. Limbs meet the body crisply; only the torso's own parts are blended broadly.
+        vec2 spine = hips == neck ? vec2(0.0, 1.0) : normalize(neck - hips), crown = mix(neck + spine * 0.66, head + spine * 0.06, 0.65);
+        float d = (length((p - crown) * vec2(1.0 / 0.235, 1.0 / 0.30)) - 1.0) * 0.235;
+        d = melt(d, limbAt(p, neck + spine * 0.05, crown - spine * 0.2, 0.125, 0.115));
+        float torso = limbAt(p, neck - spine * 0.12, hips + spine * 0.05, 0.36, 0.30);
+        torso = wide(torso, limb(p, 1, 2, 0.165, 0.165)); torso = wide(torso, limb(p, 7, 8, 0.205, 0.205));
+        torso = wide(torso, limb(p, 1, 7, 0.19, 0.17)); torso = wide(torso, limb(p, 2, 8, 0.19, 0.17));
+        d = melt(d, torso);
+        d = melt(d, limb(p, 1, 3, 0.150, 0.118)); d = melt(d, limb(p, 3, 5, 0.112, 0.082)); d = melt(d, limb(p, 5, 15, 0.085, 0.095));
+        d = melt(d, limb(p, 2, 4, 0.150, 0.118)); d = melt(d, limb(p, 4, 6, 0.112, 0.082)); d = melt(d, limb(p, 6, 16, 0.085, 0.095));
+        d = melt(d, limb(p, 7, 9, 0.215, 0.150)); d = melt(d, limb(p, 9, 11, 0.145, 0.092)); d = melt(d, limb(p, 11, 13, 0.095, 0.072));
+        d = melt(d, limb(p, 8, 10, 0.215, 0.150)); d = melt(d, limb(p, 10, 12, 0.145, 0.092)); d = melt(d, limb(p, 12, 14, 0.095, 0.072));
+        float body = smoothstep(0.012, -0.012, d), line = smoothstep(0.06, 0.03, abs(d - 0.025)), glow = exp(-max(d, 0.0) * 5.5) * 0.5;
         // Halftone: a grid of dots, fatter toward the head as if lit from above, and fatter again just inside the edge (a rim).
-        vec2 cell = fract(p * 9.5) - 0.5; float up = clamp((p.y + 4.2) / 6.6, 0.0, 1.0), rim = smoothstep(-0.30, -0.02, d);
+        vec2 cell = fract(p * 13.0) - 0.5; float up = clamp((p.y + 4.2) / 6.6, 0.0, 1.0), rim = smoothstep(-0.30, -0.02, d);
         float size = 0.26 + 0.16 * up + 0.10 * rim, dots = smoothstep(size, size - 0.10, length(cell));
         float sheen = smoothstep(0.0, 0.08, sin((p.x + p.y) * 1.4 - uTime * 1.6) - 0.93);
         vec3 fill = uTint * (0.20 + 0.18 * up) + (uTint * (0.75 + 0.45 * up) + vec3(0.30) * (rim * 0.6 + sheen)) * dots;

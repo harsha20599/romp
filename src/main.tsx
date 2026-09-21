@@ -175,7 +175,9 @@ function HandCursor() {
       el.current!.style.display = on ? '' : 'none';
       if (!on) return void ((x = NaN), (shownAt = 0));
       shownAt ||= now;
-      const at = predict(hand, undefined, POINTER_LEAD), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight, k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * 24);
+      const at = predict(hand, undefined, POINTER_LEAD), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight;
+      // Gentle when it is nearly there (a hand held over a button must not shiver), quick when there is ground to cover.
+      const k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * (7 + 26 * Math.min(1, Math.hypot(tx - x, ty - y) / (innerHeight * 0.14))));
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
       y = (Number.isNaN(y) ? ty : y) + (ty - (Number.isNaN(y) ? ty : y)) * k;
       // A new reading from the hand model: are the fingers starting to curl? (a sharp drop, or already past "open")
