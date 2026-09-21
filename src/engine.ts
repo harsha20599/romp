@@ -343,7 +343,7 @@ export function bodyLook(hex: string) {
         vec2 a = J(ia), b = J(ib), ab = b - a; float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-5), 0.0, 1.0);
         return length(p - a - ab * h) - mix(ra, rb, h) + (1.0 - step(0.4, min(uSeen[ia], uSeen[ib]))) * 9.0;
       }
-      float melt(float a, float b) { float k = 0.16, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+      float melt(float a, float b) { float k = 0.085, h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
       void main(void) {
         vec2 p = vAt, neck = (J(1) + J(2)) * 0.5, hips = (J(7) + J(8)) * 0.5, head = J(0) + vec2(0.0, 0.06);
         float tips = 0.0; // the parts that play

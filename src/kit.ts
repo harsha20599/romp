@@ -1,7 +1,7 @@
 // What every game shares: the round clock, sound, the players' hands, bursts, and the small geometry of hit-testing.
 // (The React shell that mounts a game lives in stage.tsx; nothing here touches React.)
 import type { Entity, GraphNode } from 'playcanvas';
-import { cutout, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
+import { cutout, playerCount, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
 import { CUT } from './cut.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
 import { BODY_JOINTS, H, W, bodyLook, cutoutLook, feedUnit, flat, glowLook, instanced, node, mirrorOn, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
@@ -203,13 +203,23 @@ export function figure(scene: Scene, p: number, at: { x: number; y: number; scal
   const cut = wantsPicture ? cutoutLook(hex) : null, picture = cut ? node(group, shapes.quad(CUT.left * 2, CUT.up + CUT.down), cut, [0, lift, 0]) : null;
   if (wantsPicture) { wantCutout(true); scene.cleanup(() => wantCutout(false)); }
   const look = bodyLook(hex), body = node(group, window_, look, [0, lift, 0.05]);
-  const ground = node(group, shapes.circle(1, 24), flat('#000000', { opacity: 0.3 }), [0, -3.95, -0.2]); // a soft footing under whoever it is
-  ground.setLocalScale(1.5, 0.2, 1);
+  // The figure tells the truth about where you are. Its home (`at` as the game gave it) is where you should stand —
+  // marked by a ring on the floor — and it is drawn as far from home as you are from your place in front of the
+  // camera, and as far up or down as your jump or squat. Drift off to one side and you SEE it, and step back.
+  const home = { x: at.x, y: at.y }, seatAt = playerCount() === 2 ? 0.27 + 0.46 * p : 0.5; // where in the picture this player's place is
+  const spot = node(scene.root, shapes.ring(0.86, 1, 40), flat(hex, { opacity: 0.35 }), [home.x, home.y - 3.95 * at.scale, 0.2]), ground = node(scene.root, shapes.circle(1, 24), flat('#000000', { opacity: 0.3 }), [home.x, home.y - 3.95 * at.scale, 0.25]);
+  spot.setLocalScale(1.7 * at.scale, 0.24 * at.scale, 1); ground.setLocalScale(1.5 * at.scale, 0.2 * at.scale, 1);
   const joints = new Float32Array(34), seen = new Float32Array(17);
 
   const update = () => {
     const pl = players[p], rig = pl.rig, on = pl.present && rig.length === 33;
-    if (!show(group, on)) { for (const pad of pads) pad.seen = false; return pads; }
+    show(spot, on && !inRoom);
+    if (!show(group, on)) { show(ground, false); for (const pad of pads) pad.seen = false; return pads; }
+    if (!inRoom) { // true to the room: sideways from your place, up and down with your body
+      const f = pl.frame, off = sim ? pl.lean * 1.5 : (f.x / f.aspect - seatAt) * W * 0.9;
+      at.x = Math.max(-W / 2 + 1.2, Math.min(W / 2 - 1.2, home.x + off)); at.y = home.y + pl.lift * at.scale;
+      ground.setLocalPosition(at.x, home.y - 3.95 * at.scale, 0.25); const air = 1 / (1 + Math.max(0, pl.lift) * 1.2); ground.setLocalScale(1.5 * at.scale * air, 0.2 * at.scale * air, 1);
+    }
     if (inRoom) { const f = pl.frame, unit = feedUnit(f.aspect); at.x = (f.x - f.aspect / 2) * unit; at.y = (0.5 - f.y) * unit; at.scale = f.sw * unit; }
     group.setLocalPosition(at.x, at.y, 0.6); group.setLocalScale(at.scale, at.scale, 1); // everything inside is in shoulder-widths
     // The picture, if there is one to show this frame (one player, mask arriving); otherwise the shadow body.

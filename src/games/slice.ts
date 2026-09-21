@@ -8,6 +8,7 @@
 // sync) or rivals. Either way each player is quietly helped when fruit keeps getting past them: never shown, never said.
 import { Quat, Vec3, type Entity } from 'playcanvas';
 import { hardness } from '../meta.ts';
+import { sim } from '../pose.ts';
 import { backdrop, clippable, fitted, flat, instanced, node, setClip, shapes, show, tint } from '../engine.ts';
 import { H, PLAYER_COLORS, bestLine, bursts as makeBursts, comboText, divider, hands as makeHands, hitSound, hitStop, music, round, say, scoreHud, segDist, sfx, swept, zoneHalf, zoneX, type Game, type StageHand } from '../kit.ts';
 
@@ -75,7 +76,7 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
   const haloMesh = shapes.ring(1.05, 1.3, 40), haloLook = flat('#ffffff', { opacity: 0.85 });
   const add = (e: Entity) => { scene.root.addChild(e); e.enabled = false; return e; };
 
-  const pieces: Piece[] = Array.from({ length: n === 2 ? 42 : 28 }, (_, i) => { // enough fruit for two fountains and a fan to be in the air at once
+  const pieces: Piece[] = Array.from({ length: n === 2 ? 56 : 38 }, (_, i) => { // enough fruit for two fountains and a fan to be in the air at once
     const kind: Kind = i % 7 === 4 ? 'bomb' : i % 7 === 5 ? 'star' : i % 7 === 6 ? 'power' : 'fruit', type = i % FRUIT.length;
     const whole = add((kind === 'bomb' ? bomb : kind === 'star' ? star : kind === 'power' ? banana : fruit[type]).clone() as Entity);
     const halo = kind === 'power' ? node(scene.root, haloMesh, haloLook) : null;
@@ -103,6 +104,7 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
     inside: [0, 1, 2, 3].map(() => false), burst: -1,
   };
   const hands = makeHands(scene, n), bursts = makeBursts(scene.root), passed = bestLine(hud, best);
+  if (sim) Object.assign(window, { __slice: { pieces } }); // test hook: a headless probe watches every piece, every frame
   const total = () => (team ? g.scores[0] : Math.max(g.scores[0], g.scores[1]));
   const notes = () => Array.from({ length: n }, (_, p) => [g.bestSlash[p] >= 3 ? `Best slash: ${g.bestSlash[p]} fruit` : '', g.bestCombo[p] >= 5 ? `Longest combo ×${g.bestCombo[p]}` : '', g.crits[p] ? `${g.crits[p]} critical${g.crits[p] > 1 ? 's' : ''}` : ''].filter(Boolean));
   const finish = () => { g.over = true; music.stop(); onEnd(team ? [g.scores[0], g.scores[0]] : g.scores.slice(0, n), notes()); };
@@ -228,9 +230,10 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
       pc.base.copy(pc.whole.getLocalRotation());
       pc.state = 'cut'; pc.age = 0;
       pc.halves.forEach((half, k) => {
-        const s = k ? -1 : 1, fling = crit ? 4.2 : 2.6;
+        const s = k ? -1 : 1, fling = crit ? 5 : 3.6;
         half.nx = -pc.along.y * s; half.ny = pc.along.x * s;
-        Object.assign(half, { x: pc.x, y: pc.y, vx: pc.vx + half.nx * fling, vy: pc.vy * 0.4 + half.ny * fling + 2 });
+        // Apart from the first frame (a gap you can see), thrown clear of each other, and gone only when they have fallen out of sight.
+        Object.assign(half, { x: pc.x + half.nx * 0.16, y: pc.y + half.ny * 0.16, vx: pc.vx + half.nx * fling, vy: Math.max(pc.vy * 0.4, 0) + half.ny * fling + 2.5 });
       });
       bursts.burst(pc.x, pc.y, 0.5, pc.flesh, crit ? 26 : 14, crit ? 9 : 6);
       splat(pc.x, pc.y, pc.flesh, crit);
@@ -269,7 +272,7 @@ export default async function slice({ n, stage, mode, team, best, onEnd, hud, sc
         const k = R * (1.15 + 0.12 * Math.sin(t * 9));
         pc.halo.setLocalPosition(pc.x, pc.y, -0.2); pc.halo.setLocalScale(k, k, 1); tint(pc.halo, POWERS[pc.power].hex);
       }
-      if (pc.state === 'cut' && (pc.age += dt) > 1.2) pc.state = 'off';
+      if (pc.state === 'cut' && (pc.age += dt) > 0.4 && pc.halves.every((h) => h.y < -H / 2 - 2 * R || Math.abs(h.x) > 10)) pc.state = 'off';
       // Each half swings open about the line of the cut, so its cut face rolls round to face the camera.
       const open = Math.min(1.25, pc.age * 3.2), cos = Math.cos(open), sin = Math.sin(open);
       pc.halves.forEach((half, k) => {

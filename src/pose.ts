@@ -40,6 +40,7 @@ export const tuning = {
   handCalm: 1.5, handQuick: 6,
   bodyCalm: 1.2, bodyQuick: 3, // shoulder frame (position + width) the hands are measured against
   liftCalm: 3.5, liftQuick: 6, // jump / crouch / lean signals
+  rigCalm: 4.5, rigQuick: 14, // the whole-body figure: it is looked at, not aimed with, so it may jitter a little but must never lag
   speedCut: 2.5, // the speed estimate that opens the smoothing filter up. Calm on purpose: a jumpy one lets rest-noise through.
   leadCut: 5, // the speed estimate prediction rides on: quicker, because over a ~200ms lead a velocity that is itself 60ms late costs more than its noise
   // cutoff (Hz) on the speed estimate itself: higher = the filter notices the start of a move sooner
@@ -94,6 +95,7 @@ queueMicrotask(() => Object.assign(globalThis, { __romp: { perf, track, tuning, 
 export const sim = new URLSearchParams(globalThis.location?.search ?? '').has('sim');
 
 let nPlayers = 1;
+export const playerCount = () => nPlayers;
 let landmarker: PoseLandmarker | undefined;
 export function setPlayers(n: number) {
   nPlayers = n;
@@ -187,11 +189,11 @@ export class OneEuro {
   }
   reset() { this.x = NaN; this.dx = this.v = this.ddx = 0; }
 }
-const euro = (kind: 'hand' | 'body' | 'lift') => new OneEuro(() => tuning[`${kind}Calm`], () => tuning[`${kind}Quick`]);
+const euro = (kind: 'hand' | 'body' | 'lift' | 'rig') => new OneEuro(() => tuning[`${kind}Calm`], () => tuning[`${kind}Quick`]);
 const mkFilters = () => ({
   fx: euro('body'), fy: euro('body'), sw: euro('body'), lift: euro('lift'), lean: euro('lift'), steer: euro('lift'),
   hands: [0, 1].map(() => ({ x: euro('hand'), y: euro('hand'), lost: 0 })),
-  rig: Array.from({ length: 33 }, () => [euro('hand'), euro('hand')]),
+  rig: Array.from({ length: 33 }, () => [euro('rig'), euro('rig')]),
 });
 const filters = [mkFilters(), mkFilters()];
 const resetFilters = (F: ReturnType<typeof mkFilters>) =>
