@@ -45,10 +45,10 @@ export function chopper() {
   return (hands: { x: number; y: number; vy: number; seen: boolean }[], t: number) => {
     for (const [h, hand] of hands.entries()) {
       if (!hand.seen) continue;
-      if (hand.y > 0.35) from[h] = { x: hand.x, y: hand.y, t }; // wound up: remember where
+      if (hand.y > 0.35) { if (hand.y >= from[h].y - 0.03 || t - from[h].t > 0.9) from[h] = { x: hand.x, y: hand.y, t }; } // wound up: remember the TOP of the wind-up, not the last high point on the way down
       else if (hand.y < -0.2 && t - from[h].t < 0.9 && Math.abs(hand.x - from[h].x) > 0.45) {
         const dir = Math.sign(hand.x - from[h].x), power = Math.min(1, Math.hypot(hand.x - from[h].x, hand.y - from[h].y) / Math.max(0.15, t - from[h].t) / 6);
-        from[h].t = -9;
+        from[h] = { x: 0, y: 0, t: -9 };
         return { dir, power };
       }
     }

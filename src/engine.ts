@@ -578,9 +578,10 @@ export function backdrop(scene: Scene, place: Place, bodies = false) {
 // The sky is one quad fixed to the camera at the back of the view; `horizon` is where the ground meets it, as a
 // fraction of the screen height. Day: sun, drifting clouds, two ranges of hills. Night: stars, a moon, a lit skyline.
 // uDrive slides the far scenery sideways a touch as the world moves, so the distance is alive too.
-export function sky(scene: Scene, night: boolean, horizon: number, view: View) {
+export function sky(scene: Scene, night: boolean, horizon: number, view: View, dusk = false) {
+  const P = dusk ? { low: '0.98, 0.62, 0.38', high: '0.16, 0.14, 0.40', sun: '1.0, 0.75, 0.45', sunAt: '0.95, 0.60', far: '0.42, 0.34, 0.50', near: '0.20, 0.22, 0.30', cloud: '1.0, 0.78, 0.66' } : { low: '0.80, 0.91, 0.98', high: '0.20, 0.50, 0.90', sun: '1.0, 0.95, 0.75', sunAt: '0.42, 0.84', far: '0.55, 0.70, 0.80', near: '0.36, 0.58, 0.50', cloud: '1.0, 1.0, 1.0' };
   const m = own(new ShaderMaterial({
-    uniqueName: `romp-sky-${night ? 'night' : 'day'}`,
+    uniqueName: `romp-sky-${night ? 'night' : dusk ? 'dusk' : 'day'}`,
     attributes: { vertex_position: SEMANTIC_POSITION },
     vertexGLSL: `attribute vec3 vertex_position; uniform mat4 matrix_model; uniform mat4 matrix_viewProjection; varying vec2 vUv;
       void main(void) { vUv = vertex_position.xy + 0.5; gl_Position = matrix_viewProjection * matrix_model * vec4(vertex_position, 1.0); }`,
@@ -598,11 +599,11 @@ export function sky(scene: Scene, night: boolean, horizon: number, view: View) {
           float body = step(vUv.y, top) * step(0.08, fract(sx)) * step(h - 0.02, vUv.y); vec2 wq = vec2(fract(sx) * 5.0, (vUv.y - h) * 90.0);
           float lit = step(0.55, hash(floor(wq) + id * 7.0)) * step(0.25, fract(wq.x)) * step(0.3, fract(wq.y));
           c = mix(c, mix(vec3(0.05, 0.04, 0.14), vec3(0.09, 0.07, 0.22), k) + vec3(1.0, 0.8, 0.4) * lit * 0.55, body); }
-        c += vec3(0.85, 0.25, 0.6) * 0.22 * exp(-up * 9.0);` : `c = mix(vec3(0.80, 0.91, 0.98), vec3(0.20, 0.50, 0.90), pow(up, 0.7));
-        vec2 sn = vec2(x - 0.42, vUv.y - 0.84); c += vec3(1.0, 0.95, 0.75) * (smoothstep(0.06, 0.052, length(sn)) + 0.18 / (1.0 + 60.0 * dot(sn, sn)));
-        float cl = smoothstep(0.50, 0.78, fbm(vec2(x * 2.2 + t * 0.012 + uDrive * 0.0006, vUv.y * 7.0))) * smoothstep(0.08, 0.35, up) * (1.0 - smoothstep(0.75, 1.0, up)); c = mix(c, vec3(1.0), cl * 0.9);
+        c += vec3(0.85, 0.25, 0.6) * 0.22 * exp(-up * 9.0);` : `c = mix(vec3(${P.low}), vec3(${P.high}), pow(up, 0.7));
+        vec2 sn = vec2(x, vUv.y) - vec2(${P.sunAt}); c += vec3(${P.sun}) * (smoothstep(0.06, 0.052, length(sn)) + 0.18 / (1.0 + 60.0 * dot(sn, sn)));
+        float cl = smoothstep(0.50, 0.78, fbm(vec2(x * 2.2 + t * 0.012 + uDrive * 0.0006, vUv.y * 7.0))) * smoothstep(0.08, 0.35, up) * (1.0 - smoothstep(0.75, 1.0, up)); c = mix(c, vec3(${P.cloud}), cl * 0.9);
         float far = h + 0.030 + 0.028 * sin(x * 4.0 + uDrive * 0.002 + 1.0) + 0.014 * sin(x * 11.0 + uDrive * 0.004), nearH = h + 0.008 + 0.022 * sin(x * 2.6 + uDrive * 0.004 + 4.0) + 0.008 * sin(x * 17.0);
-        c = mix(c, vec3(0.55, 0.70, 0.80), smoothstep(far + 0.002, far - 0.002, vUv.y)); c = mix(c, vec3(0.36, 0.58, 0.50), smoothstep(nearH + 0.002, nearH - 0.002, vUv.y));`}
+        c = mix(c, vec3(${P.far}), smoothstep(far + 0.002, far - 0.002, vUv.y)); c = mix(c, vec3(${P.near}), smoothstep(nearH + 0.002, nearH - 0.002, vUv.y));`}
         gl_FragColor = vec4(gammaCorrectOutput(c), 1.0);
       }`,
   }));
@@ -616,7 +617,7 @@ export function sky(scene: Scene, night: boolean, horizon: number, view: View) {
 // The ground of a 3D game in one shader: `tracks` are the x of each road's centre. Grass is mown in bands (or, in the
 // city, paved in slabs), the road is asphalt with two dashed lane lines, solid edges and a kerb; everything scrolls with
 // uDrive (distance travelled), lines stay crisp into the distance, and it fades into the fog colour like the rest.
-export function ground(scene: Scene, o: { tracks: number[]; lane: number; city: boolean; fog: string; fogFrom: number; fogTo: number; size: [number, number]; z: number }) {
+export function ground(scene: Scene, o: { tracks: number[]; lane: number; city: boolean; fog: string; fogFrom: number; fogTo: number; size: [number, number]; z: number; y?: number }) { // tracks: [] = no road, just ground
   const m = own(new ShaderMaterial({
     uniqueName: `romp-ground-${o.city ? 'city' : 'park'}`,
     attributes: { vertex_position: SEMANTIC_POSITION },
@@ -640,10 +641,29 @@ export function ground(scene: Scene, o: { tracks: number[]; lane: number; city: 
         gl_FragColor = vec4(gammaCorrectOutput(c), 1.0);
       }`,
   }));
-  m.setParameter('uDrive', 0); m.setParameter('uFog', linear(o.fog)); m.setParameter('uFogRange', [o.fogFrom, o.fogTo]); m.setParameter('uTracks', [o.tracks[0], o.tracks[o.tracks.length - 1]]); m.setParameter('uLane', o.lane);
+  m.setParameter('uDrive', 0); m.setParameter('uFog', linear(o.fog)); m.setParameter('uFogRange', [o.fogFrom, o.fogTo]); m.setParameter('uTracks', o.tracks.length ? [o.tracks[0], o.tracks[o.tracks.length - 1]] : [9999, 9999]); m.setParameter('uLane', o.lane);
   m.update();
-  node(scene.root, shapes.floor(o.size[0], o.size[1]), m, [0, 0, o.z]);
+  node(scene.root, shapes.floor(o.size[0], o.size[1]), m, [0, o.y ?? 0, o.z]);
   return { drive: (v: number) => m.setParameter('uDrive', v) };
+}
+
+// A clearing in the woods, for games that are played on the stage's flat plane (so hands, figures and popups all
+// still line up) but should LOOK like a place: the camera sits where the flat stage's camera would, with a lens that
+// makes the z = 0 plane exactly the 16×9 stage; behind that plane there is ground, a sky, and a ring of trees.
+export const ROOM: View = { position: [0, 0, 10], fov: 48.46, near: 0.1, far: 170 };
+export const FLOOR = -4.3;
+export async function clearing(scene: Scene, dusk: boolean) {
+  const haze = dusk ? '#c98a6e' : '#cfe8f5';
+  scene.sky(haze); scene.fog(haze, 26, 75); scene.ambient(dusk ? '#ffd9b8' : '#fff6e5', dusk ? 0.7 : 0.9);
+  sky(scene, false, 0.5, ROOM, dusk);
+  ground(scene, { tracks: [], lane: 1, city: false, fog: haze, fogFrom: 26, fogTo: 75, size: [260, 170], z: -70, y: FLOOR });
+  const N = '/assets/nature/', C = '/assets/camp/', kinds = await Promise.all([fitted(N + 'tree_oak.glb', 11, true), fitted(N + 'tree_pineTallA.glb', 13, true), fitted(N + 'tree_detailed.glb', 10, true), fitted(C + 'tree-tall.glb', 12, true), fitted(N + 'tree_fat.glb', 9, true), fitted(N + 'plant_bushLarge.glb', 2.6, true), fitted(N + 'rock_largeA.glb', 2.4, true), fitted(N + 'grass_large.glb', 1.2, true)]);
+  // Trees in a horseshoe behind the play plane — dense at the back, open toward the camera — and small things scattered between.
+  for (let i = 0; i < 46; i++) {
+    const big = i < 30, a = (i / (big ? 30 : 16)) * Math.PI, r = big ? 17 + ((i * 7) % 11) * 1.6 : 8 + ((i * 5) % 7) * 1.5, e = kinds[big ? i % 5 : 5 + (i % 3)].clone() as Entity;
+    e.setLocalPosition(Math.cos(a) * r * 1.5, FLOOR, -5 - Math.sin(a) * r - (big ? 0 : 1)); e.setLocalEulerAngles(0, (i * 73) % 360, 0); const k = 0.85 + ((i * 13) % 10) * 0.04; e.setLocalScale(k, k, k);
+    scene.root.addChild(e);
+  }
 }
 
 // Shade on the ground under a thing: a soft dark ellipse. Cheap, and the difference between floating and standing.
