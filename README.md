@@ -1,22 +1,48 @@
 # Romp
 
-Camera-tracked fitness games on the TV, run from a Galaxy Tab S7 over HDMI.
-Plan, state and log live on the Watchtower board: `~/watchtower/projects/romp/`.
+**Your body is the controller.** 17 camera-tracked motion games (fitness, rhythm, pose and arcade) that run in Chrome on
+an old tablet or phone and play on your TV over a USB-C → HDMI cable. No console, no subscription, no app store.
+
+## Play it
+
+Romp is a static website: build it once, open it in Chrome on the tablet, allow the camera. The camera needs **HTTPS**
+(or `localhost`), which is why the easiest way is a free Vercel deploy:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fharsha20599%2Fromp&project-name=romp&repository-name=romp)
+
+1. Click the button, sign in with GitHub, press **Deploy**. About two minutes later you get a link like `https://romp-xyz.vercel.app`.
+2. Open that link in **Chrome** on your tablet, allow the camera, then Chrome menu → **Add to Home screen**.
+
+**Or build it yourself** (Node.js 22+ and Git):
+
+```bash
+git clone https://github.com/harsha20599/romp.git
+cd romp
+npm install
+npm run build
+npm run play        # serves dist/ on your network, port 4173
+```
+
+The tablet opens `http://<your-computer's-ip>:4173`. That is plain http, so Chrome blocks the camera until you open
+`chrome://flags/#unsafely-treat-insecure-origin-as-secure` on the tablet, add that address, set it to Enabled and relaunch.
+Any static host with HTTPS works as well (Netlify, Cloudflare Pages, GitHub Pages at a domain root): publish `dist/`.
+
+Then: tablet under the TV, landscape, front camera on the room; TV picture mode **Game** and motion smoothing off; stand
+back till your whole body is in view; point and close your fist to press. Home → Tracking → **Measure** once per setup.
+
+## Developing
 
 ```bash
 npm run dev      # http://localhost:5180 — add ?sim to play with the mouse, no camera
 npm run check    # input-maths + streak asserts, then tsc
 ```
 
-Two ways in, both serving the same `dist/` — run `npm run build` to publish a change, nothing restarts:
+How I serve it at home (both serve the same `dist/`; run `npm run build` to publish a change, nothing restarts):
 
-- **Tailscale (preferred): https://mayjuneserver.taild23e3.ts.net:8445** — `tailscale serve --https 8445` proxies to
-  `romp-live.service` (`node serve.mjs 5192`, loopback): the same `dist/` over real HTTPS, tailnet-only, plus `POST /report`
-  so the tablet's own measurements land in `reports/`. The camera just works. The tablet needs the Tailscale app, signed in.
-  Off switch: `tailscale serve --https=8445 off`.
-- **LAN: http://192.168.0.100:5180** — `systemctl --user status romp`. Plain http, so Chrome blocks the
-  camera until, once on the tablet, `chrome://flags/#unsafely-treat-insecure-origin-as-secure` lists
-  that address and is Enabled.
+- **Tailscale HTTPS** — `tailscale serve --https 8445` proxies to `node serve.mjs 5192` on loopback: the same `dist/`,
+  tailnet-only, plus `POST /report` so the tablet's own measurements land in `reports/`. The camera just works; the
+  tablet needs the Tailscale app, signed in.
+- **LAN http on :5180** — a user service. Plain http, so the tablet needs the Chrome flag above.
 
 Tuning knobs: `tuning` in `src/pose.ts`.
 

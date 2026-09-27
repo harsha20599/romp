@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # What the tablet itself says about the things that cost latency: camera modes, heat, clocks, display.
 # Needs the tablet paired for wireless debugging:  adb pair <ip:pairport> <code>  then  adb connect <ip:port>
-ADB=${ADB:-/home/harsha/toolchain/android-sdk/platform-tools/adb}
+ADB=${ADB:-adb}
 sh() { "$ADB" shell "$@" 2>/dev/null; }
 echo "== device";   sh 'echo $(getprop ro.product.model) · Android $(getprop ro.build.version.release) · $(getprop ro.board.platform) · One UI $(getprop ro.build.version.oneui)'
 echo "== chrome";   sh dumpsys package com.android.chrome | grep -m1 versionName
