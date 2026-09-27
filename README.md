@@ -1,7 +1,7 @@
 # Romp
 
 **Your body is the controller.** 17 camera-tracked motion games (fitness, rhythm, pose and arcade) that run in Chrome on
-an old tablet or phone and play on your TV over a USB-C → HDMI cable. No console, no subscription, no app store.
+an old Android tablet and play on your TV over a USB-C → HDMI cable. No console, no subscription, no app store.
 
 ## Play it
 
