@@ -123,3 +123,11 @@ name in `public/assets/audio.json`; after adding `.ogg` files, rebuild it:
 ```bash
 node -e "const fs=require('fs'),o={};for(const d of['sfx','voice','jingles'])for(const f of fs.readdirSync('public/assets/'+d).filter(f=>f.endsWith('.ogg')).sort()){const k=d==='sfx'?f.replace(/\.ogg$/,'').replace(/_?\d+$/,''):d==='voice'?'say_'+f.replace(/\.ogg$/,''):f.includes('HIT')?'jingle_win':'jingle_level';(o[k]??=[]).push(d+'/'+f)}fs.writeFileSync('public/assets/audio.json',JSON.stringify(o))"
 ```
+
+## License
+
+**Free for personal use.** Play it, change it, build on it, tinker however you like.
+**Sharing publicly** (a fork, a hosted copy, a video, a post) needs a visible credit to **@yem.cube on Instagram**.
+**Commercial use** needs written approval first. Ask [@yem.cube on Instagram](https://www.instagram.com/yem.cube).
+This covers every version, including the older Romp releases. Third-party parts keep their own licenses.
+Full terms: [LICENSE](LICENSE).

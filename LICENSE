@@ -1,0 +1,61 @@
+Jiggle Personal Use License, version 1.0
+
+Copyright (c) 2026 Harsha (@yem.cube on Instagram). All rights not granted below are reserved.
+
+This license covers this project's source code, art, music, sounds, game designs and documentation
+(together, "the Software"). It covers the Software under all the names it has been released under,
+including Romp, Wiggle and Jiggle. It covers every version: each commit, branch, tag and release, past
+and future, unless a later version of this license says otherwise. Earlier versions were published with
+no license (all rights reserved). Those versions are now available under these terms too.
+
+1. PERSONAL USE: FREE
+
+   You may use, run, copy, study and change the Software however you like, for free, for yourself, your
+   family and friends at home, and your own non-commercial projects. Tinker as much as you want: change
+   the games, make new ones and build on the code. Running your own copy on your own devices or on a
+   server for yourself counts as personal use.
+
+2. PUBLIC SHARING: CREDIT REQUIRED
+
+   You may share the Software publicly, changed or unchanged, for non-commercial purposes. You may also
+   share things made with it publicly, such as a public fork, a hosted copy that others can visit, a
+   video, a stream, a post or a screenshot. Each time, you must clearly credit:
+
+       @yem.cube on Instagram (https://www.instagram.com/yem.cube)
+
+   Put the credit where people will see it: in the app or page itself, in the post or video description,
+   or at the top of the README of a fork. Keep this LICENSE file with any copy of the source.
+
+3. COMMERCIAL USE: APPROVAL REQUIRED
+
+   Commercial use needs prior written approval from the copyright holder, and it also needs the credit
+   in section 2. Commercial use means any use that earns money or gives a business an advantage. This
+   includes, for example, selling the Software or anything built from it; charging for access; showing
+   ads or selling in-app purchases in it; offering it in a gym, studio, school, event or other paid
+   service; using it in client or contract work; and paid or sponsored content that features it.
+   To ask for approval, message @yem.cube on Instagram. Approval is only valid if it is given in writing
+   (a direct message or email counts), and it covers only what it says.
+
+4. NAMES AND LOGOS
+
+   This license gives no rights to the names Romp, Wiggle or Jiggle, the logos, or the yem.cube name,
+   apart from using them to give the credit in section 2. Do not present your version as the official
+   one.
+
+5. THIRD-PARTY PARTS
+
+   Some parts of this project belong to other people and keep their own licenses. These terms do not
+   apply to them. Among them: PlayCanvas (MIT), React (MIT), MediaPipe Tasks Vision and its models
+   (Apache 2.0), Rapier (Apache 2.0), the Fredoka font (SIL Open Font License 1.1), and the 3D models
+   and sounds listed in public/assets/CREDITS.md (CC0 or CC-BY, credited there).
+
+6. NO WARRANTY
+
+   The Software is provided "as is", without warranty of any kind. Moving your body carries a risk of
+   injury: clear the space around you, and stop if anything hurts. In no event shall the copyright holder
+   be liable for any claim, damages or other liability arising from the Software or its use.
+
+7. ENDING
+
+   If you break these terms, your rights under this license end. If you fix the problem within 30 days
+   of being told about it, your rights come back.
