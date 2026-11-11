@@ -4,14 +4,12 @@ import { DAY_GOAL, summary, type Session } from './stats.ts';
 
 // Score needed for 1, 2 and 3 stars at stage 1. Guesses until real scores come in — this table is the tuning knob.
 export const STARS: Record<string, [number, number, number]> = {
-  slice: [40, 80, 130], run: [400, 900, 1500], jab: [20, 40, 65], beat: [25, 50, 80], goalie: [8, 16, 26],
-  pulse: [6000, 12000, 20000], keepy: [40, 75, 115], leaks: [18, 32, 48], sprint: [150, 240, 320], jacks: [40, 75, 110], forge: [40, 70, 100], lumber: [15, 28, 42],
-  smash: [15, 30, 45], rocket: [40, 80, 130], freeze: [120, 220, 330], wipe: [120, 220, 320], shapeup: [300, 480, 640],
+  slice: [40, 80, 130], run: [400, 900, 1500],
 };
 export const STAGES = 5;
 export const hardness = (stage: number) => 1 + (stage - 1) * 0.22; // games multiply speeds and spawn rates by this
 // A game's other modes have their own goals; a team of two is asked for a bit less than twice what one player is.
-export const MODE_STARS: Record<string, [number, number, number]> = { 'slice:classic': [30, 70, 120], 'slice:zen': [40, 70, 100], 'keepy:classic': [30, 70, 120], 'pulse:afterglow': [6500, 13000, 22000], 'pulse:hyperline': [7000, 14000, 24000] };
+export const MODE_STARS: Record<string, [number, number, number]> = { 'slice:classic': [30, 70, 120], 'slice:zen': [40, 70, 100] };
 export const variantOf = (mode: string, team: boolean) => [mode, team ? 'team' : ''].filter(Boolean).join('+');
 export const starGoals = (game: string, stage: number, variant = '') => {
   const team = variant.endsWith('team'), mode = variant.replace(/\+?team$/, '');
@@ -55,15 +53,14 @@ export const BADGES: { id: string; name: string; how: string; test: (c: Ctx) => 
   { id: 'streak7', name: 'Full week', how: `Hit ${DAY_GOAL} points 7 days running`, test: (c) => summary(c.all, c.who, c.now).streak >= 7 },
   { id: 'streak30', name: 'Unstoppable', how: `Hit ${DAY_GOAL} points 30 days running`, test: (c) => summary(c.all, c.who, c.now).streak >= 30 },
   { id: 'stars10', name: 'Star collector', how: 'Collect 10 stars', test: (c) => totalStars(c.all, c.who) >= 10 },
-  { id: 'stars40', name: 'Constellation', how: 'Collect 40 stars', test: (c) => totalStars(c.all, c.who) >= 40 },
-  { id: 'stars100', name: 'Galaxy', how: 'Collect 100 stars', test: (c) => totalStars(c.all, c.who) >= 100 },
+  { id: 'stars20', name: 'Constellation', how: 'Collect 20 stars', test: (c) => totalStars(c.all, c.who) >= 20 },
+  { id: 'stars30', name: 'Galaxy', how: 'Collect 30 stars', test: (c) => totalStars(c.all, c.who) >= 30 },
   { id: 'flawless', name: 'Flawless', how: 'Three stars on stage 3 or higher', test: (c) => c.games.some((s) => (s.stars ?? 0) === 3 && (s.stage ?? 1) >= 3) },
   { id: 'summit', name: 'Summit', how: 'Reach stage 5 in any game', test: (c) => Object.keys(STARS).some((g) => unlockedStage(c.all, c.who, g) >= STAGES) },
   { id: 'five', name: 'Five a day', how: 'Play 5 games in one day', test: (c) => c.games.filter((s) => dayOf(s.t) === dayOf(c.now)).length >= 5 },
   { id: 'level5', name: 'Warmed up', how: 'Reach level 5', test: (c) => levelOf(xpOf(c.all, c.who)).level >= 5 },
   { id: 'level10', name: 'In shape', how: 'Reach level 10', test: (c) => levelOf(xpOf(c.all, c.who)).level >= 10 },
   { id: 'early', name: 'Early bird', how: 'Play before 8 in the morning', test: (c) => c.games.some((s) => new Date(s.t).getHours() < 8) },
-  { id: 'squats', name: 'Leg day', how: 'Reach 150 m in Rocket', test: (c) => c.games.some((s) => s.game === 'rocket' && s.score >= 150) },
   { id: 'runner', name: 'Road runner', how: 'Score 2000 in Run', test: (c) => c.games.some((s) => s.game === 'run' && s.score >= 2000) },
 ];
 export function badgesOf(all: Session[], who: string, now = Date.now()) {
@@ -84,7 +81,7 @@ export function dailyChallenges(all: Session[], who: string, names: Record<strin
     [`pts${pts}`, `Earn ${pts} activity points`, pts, today.reduce((a, s) => a + s.points, 0)],
     [`stars:${gameA}`, `Get 2 stars in ${names[gameA] ?? gameA}`, 2, Math.max(0, ...today.filter((s) => s.game === gameA).map((s) => s.stars ?? 0))],
     gameB === gameA
-      ? ['variety', 'Play 3 different games', 3, new Set(today.map((s) => s.game)).size]
+      ? ['variety', `Play ${ids.length} different games`, ids.length, new Set(today.filter((s) => ids.includes(s.game)).map((s) => s.game)).size]
       : [`play:${gameB}`, `Play ${names[gameB] ?? gameB} twice`, 2, today.filter((s) => s.game === gameB).length],
   ];
   return list.map(([id, text, goal, have]) => ({ id: `${day}:${id}`, text, goal, have: Math.min(goal, have), done: have >= goal }));

@@ -8,7 +8,6 @@ type Fileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 let fileset: Fileset, landmarker: PoseLandmarker | undefined, hands: HandLandmarker | null | undefined, origin = '';
 let gpu = false;
 let clockShift = 0; // worker clock → page clock: each has its own performance.now() zero
-let wantLuma = false, lumaBuf = new Uint8Array(0); // delay calibration: report each frame's brightness alongside its pose
 let gripRect: number[] | null = null; // [x, y, size] as fractions of the frame, while a menu wants the fist read
 // Two players: this tracker looks at one side of the picture only, for one seat, with the light single-person model
 // (`side`). Its partner — another worker like this one — takes the other side, so the two run side by side instead
@@ -136,17 +135,8 @@ async function pump(readable: ReadableStream<VideoFrame>) {
       else if (!mine) landmarks = landmarker.detectForVideo(frame, sent).landmarks;
       const ms = performance.now() - t0 - cutMs;
       proven = true;
-      let luma: number | undefined;
-      if (wantLuma) { // the Y plane leads every camera format Chrome hands out (I420, NV12); a sparse sample of it is plenty
-        if (lumaBuf.length < frame.allocationSize()) lumaBuf = new Uint8Array(frame.allocationSize());
-        await frame.copyTo(lumaBuf);
-        const n = frame.codedWidth * frame.codedHeight;
-        let sum = 0, count = 0;
-        for (let i = 0; i < n; i += 97) { sum += lumaBuf[i]; count++; }
-        luma = sum / count;
-      }
       const picture = cut as { bitmap: ImageBitmap; slots: number } | null; // (assigned inside the callback above)
-      (postMessage as (message: unknown, transfer: Transferable[]) => void)({ type: 'pose', seat: mine?.seat, landmarks, ts, arrived, ms, cutMs, luma, aspect: frame.displayWidth / frame.displayHeight, cut: picture }, picture ? [picture.bitmap] : []);
+      (postMessage as (message: unknown, transfer: Transferable[]) => void)({ type: 'pose', seat: mine?.seat, landmarks, ts, arrived, ms, cutMs, aspect: frame.displayWidth / frame.displayHeight, cut: picture }, picture ? [picture.bitmap] : []);
       if (gripRect) {
         const [x, y, size] = gripRect, w = frame.displayWidth, h = frame.displayHeight, px = Math.round(size * w);
         const crop = await createImageBitmap(frame, Math.round(x * w), Math.round(y * h), px, px, { resizeWidth: 224, resizeHeight: 224, resizeQuality: 'medium' }).catch(() => null);
@@ -193,7 +183,6 @@ self.onmessage = async (e: MessageEvent) => {
   else if (m.type === 'cut') { if (gpu && wantCut !== m.on) { wantCut = m.on; await landmarker?.setOptions({ outputSegmentationMasks: m.on }); } }
   else if (m.type === 'stream') void pump(m.readable);
   else if (m.type === 'grip') gripRect = m.rect;
-  else if (m.type === 'luma') wantLuma = m.on;
   else if (m.type === 'frame' && landmarker) {
     const t0 = performance.now(), landmarks = landmarker.detectForVideo(m.bitmap, m.t).landmarks;
     m.bitmap.close();

@@ -238,7 +238,7 @@ export function setClip(e: Entity, nx: number, ny: number, nz: number, w: number
 }
 
 // ---- many small things, one draw call --------------------------------------------------------------------------------
-// Every instance is a position, a uniform scale and a colour. Bursts, stars and Wipe's tiles are all this.
+// Every instance is a position, a uniform scale and a colour. Bursts and stars use these instances.
 const dots = () => {
   const m = new ShaderMaterial({
     uniqueName: 'romp-dots',
@@ -436,88 +436,14 @@ const PLACES = {
     vec3 c = mix(vec3(0.20, 0.10, 0.06), vec3(0.34, 0.19, 0.10), hash(vec2(board, 1.0)) * 0.6 + grain * 0.4) * (1.0 - seam * 0.55);
     float disc = smoothstep(0.30, 0.295, length(p - vec2(0.0, 0.02))); c = mix(c, c * 1.5 + vec3(0.10, 0.05, 0.03), disc * 0.55);
     c += vec3(1.0, 0.55, 0.2) * (0.16 / (0.3 + 6.0 * dot(p - vec2(-0.8, 0.5), p - vec2(-0.8, 0.5))) + 0.16 / (0.3 + 6.0 * dot(p - vec2(0.8, 0.5), p - vec2(0.8, 0.5)))) * (0.9 + 0.1 * sin(t * 3.0));`,
-  // Keepy-Uppy: a late-afternoon sky, slow clouds, soft hills along the bottom.
-  sky: `vec3 c = mix(vec3(0.98, 0.72, 0.55), vec3(0.22, 0.45, 0.80), smoothstep(-0.1, 0.9, uv.y));
-    c += vec3(1.0, 0.85, 0.6) * 0.35 / (1.0 + 18.0 * dot(p - vec2(0.55, 0.22), p - vec2(0.55, 0.22)));
-    float cloud = smoothstep(0.52, 0.8, fbm(vec2(p.x * 1.6 + t * 0.02, p.y * 3.2 + 4.0))) * smoothstep(0.0, 0.35, uv.y - 0.35);
-    c = mix(c, vec3(1.0, 0.96, 0.93), cloud * 0.75);
-    float far = smoothstep(0.0, 0.01, uv.y - (0.20 + 0.05 * sin(p.x * 3.0 + 1.0) + 0.03 * sin(p.x * 7.0))), near = smoothstep(0.0, 0.01, uv.y - (0.11 + 0.04 * sin(p.x * 2.2 + 4.0)));
-    c = mix(vec3(0.30, 0.47, 0.50), c, far); c = mix(vec3(0.16, 0.33, 0.30), c, near); c *= 0.8;`,
-  // Leaks: inside a tank in deep water — light shafts from above, caustics, bubbles, a riveted frame.
-  deep: `vec3 c = mix(vec3(0.01, 0.06, 0.13), vec3(0.03, 0.30, 0.42), smoothstep(0.0, 1.0, uv.y));
-    float shaft = pow(max(0.0, sin(p.x * 5.0 + uv.y * 1.5 + t * 0.25) * 0.5 + 0.5), 6.0) * uv.y; c += vec3(0.25, 0.55, 0.6) * shaft * 0.35;
-    float ca = sin(p.x * 14.0 + t) + sin(p.y * 17.0 - t * 1.3) + sin((p.x + p.y) * 11.0 + t * 0.7); c += vec3(0.1, 0.3, 0.35) * smoothstep(1.6, 2.6, ca) * 0.35;
-    for (int i = 0; i < 6; i++) { float k = float(i), bx = hash(vec2(k, 3.0)) * 3.2 - 1.6, by = fract(hash(vec2(k, 9.0)) + t * (0.04 + 0.03 * hash(vec2(k, 5.0)))) * 1.3 - 0.65; float r = 0.012 + 0.02 * hash(vec2(k, 7.0)); float d = length(p - vec2(bx + 0.03 * sin(t + k), by)); c += vec3(0.5, 0.8, 0.9) * smoothstep(r, r * 0.6, d) * 0.35; }
-    float edge = max(abs(p.x) / 1.7778, abs(p.y) / 1.0); float frame = smoothstep(0.93, 0.945, edge); c = mix(c, vec3(0.10, 0.13, 0.17), frame);
-    vec2 rv = vec2(fract(uv.x * 16.0) - 0.5, fract(uv.y * 9.0) - 0.5); c += vec3(0.25) * frame * smoothstep(0.16, 0.10, length(rv));`,
-  // Jab: a boxing gym at night — a lit wall, diagonal neon, the ring rope lines, a pool of light on the floor.
-  gym: `vec3 c = mix(vec3(0.05, 0.04, 0.10), vec3(0.13, 0.08, 0.20), uv.y);
-    float stripe = smoothstep(0.47, 0.5, abs(fract((p.x + p.y * 0.6) * 1.4 + 0.2) - 0.5)); c += vec3(0.9, 0.15, 0.4) * stripe * 0.10;
-    c += vec3(1.0, 0.85, 0.7) * 0.22 * smoothstep(0.9, 0.0, abs(p.x) * 0.9 + (1.0 - uv.y) * 0.5) * uv.y;
-    for (int i = 0; i < 3; i++) { float y = 0.30 + float(i) * 0.085; c = mix(c, vec3(0.85, 0.2, 0.3), smoothstep(0.006, 0.002, abs(uv.y - y)) * 0.6); }
-    float floor_ = smoothstep(0.2, 0.0, uv.y); c = mix(c, vec3(0.10, 0.07, 0.16) + vec3(0.5, 0.35, 0.6) * 0.25 / (1.0 + 9.0 * p.x * p.x), floor_);`,
-  // Beat: the synthwave road — a striped sun on the horizon and a grid floor rushing toward you in time.
-  synth: `float horizon = 0.42; vec3 c = mix(vec3(0.10, 0.02, 0.22), vec3(0.02, 0.01, 0.10), smoothstep(horizon, 1.0, uv.y));
-    float sd = length(vec2(p.x, (uv.y - horizon - 0.16) * 2.0)); float sun = smoothstep(0.42, 0.41, sd) * step(0.04, fract(uv.y * 22.0 - t * 0.3) + (uv.y - horizon) * 3.0 - 0.35);
-    c = mix(c, mix(vec3(1.0, 0.25, 0.55), vec3(1.0, 0.8, 0.3), (uv.y - horizon) * 3.0), sun * step(horizon, uv.y)); c += vec3(0.9, 0.2, 0.6) * 0.18 / (1.0 + 30.0 * abs(uv.y - horizon));
-    if (uv.y < horizon) { float z = 0.12 / (horizon - uv.y + 0.02), gx = abs(fract(p.x * z * 1.2) - 0.5), gz = abs(fract(z * 1.5 + t * 1.2) - 0.5); float g = smoothstep(0.46, 0.5, max(gx, gz)); c = mix(vec3(0.03, 0.01, 0.09), vec3(0.2, 0.9, 1.0), g * smoothstep(0.0, 0.25, horizon - uv.y + 0.05) * 0.55); }`,
-  // Freeze: a dance floor — slow coloured beams turning overhead, a glossy floor picking them up.
-  disco: `vec3 c = vec3(0.03, 0.02, 0.08); float ang = atan(p.y - 0.9, p.x);
-    for (int i = 0; i < 4; i++) { float k = float(i), beam = pow(max(0.0, cos((ang + t * (0.12 + 0.05 * k) + k * 1.7) * 3.0)), 14.0); c += (0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + k * 1.4 + t * 0.2)) * beam * 0.16; }
-    float tile = step(0.5, fract(floor(p.x * 3.0 + 40.0) * 0.5 + floor((0.25 - uv.y) * 18.0 / (uv.y + 0.4)) * 0.5)); float floor_ = smoothstep(0.26, 0.2, uv.y);
-    c = mix(c, c * 1.6 + vec3(0.05, 0.03, 0.10) * (0.6 + tile), floor_);`,
-  // Shape Up: a photo studio sweep — one soft spot on a seamless wall.
-  studio: `vec3 c = mix(vec3(0.07, 0.05, 0.16), vec3(0.20, 0.13, 0.36), smoothstep(1.3, 0.0, length(p - vec2(0.0, 0.15))));
-    c = mix(c, c * 0.7, smoothstep(0.22, 0.18, uv.y)); c += vec3(0.6, 0.4, 0.9) * 0.05 * smoothstep(0.004, 0.0, abs(uv.y - 0.2));`,
-  // Rocket: deep space — nebula clouds that the stars stream across.
-  space: `vec3 c = vec3(0.01, 0.01, 0.04); float n1 = fbm(p * 1.3 + vec2(0.0, t * 0.01)), n2 = fbm(p * 2.1 + 7.0);
-    c += vec3(0.30, 0.10, 0.45) * smoothstep(0.35, 0.9, n1) * 0.5 + vec3(0.05, 0.25, 0.40) * smoothstep(0.45, 0.95, n2) * 0.45;`,
-  // Sprint: a stadium at dusk — floodlights, a crowd of lights, and the track rushing under you at whatever pace you set (uDrive = metres run).
-  track: `float horizon = 0.46; vec3 c = mix(vec3(0.98, 0.55, 0.35), vec3(0.10, 0.10, 0.32), smoothstep(horizon, 1.0, uv.y));
-    float stand = smoothstep(horizon + 0.17, horizon + 0.16, uv.y) * step(horizon, uv.y); c = mix(c, vec3(0.06, 0.05, 0.14), stand * 0.92);
-    vec2 seat = vec2(uv.x * 170.0, (uv.y - horizon) * 110.0); c += stand * step(0.9, hash(floor(seat))) * smoothstep(0.5, 0.2, length(fract(seat) - 0.5)) * (0.5 + 0.5 * sin(t * 3.0 + hash(floor(seat)) * 40.0)) * vec3(1.0, 0.9, 0.7) * 0.5;
-    for (int i = 0; i < 4; i++) { vec2 l = vec2(-1.35 + 0.9 * float(i), 0.62); c += vec3(1.0, 0.95, 0.85) * 0.011 / (0.006 + dot(p - l, p - l)); }
-    if (uv.y < horizon) { float z = 0.16 / (horizon - uv.y + 0.015), x = p.x * z * 0.55; float lane = smoothstep(0.47, 0.5, abs(fract(x) - 0.5));
-      float dash = step(0.5, fract(z * 0.8 + uDrive * 0.35)); vec3 tartan = mix(vec3(0.62, 0.20, 0.14), vec3(0.74, 0.27, 0.18), dash); tartan = mix(tartan, vec3(0.95), lane);
-      c = mix(tartan * (0.55 + 0.45 * smoothstep(0.0, 0.3, horizon - uv.y)), vec3(0.98, 0.55, 0.35) * 0.6, smoothstep(0.06, 0.0, horizon - uv.y)); }`,
-  // Forge: a smithy — dark stone, a furnace mouth that breathes with the heat you are building (uDrive = 0..1), sparks of light on the walls.
-  forge: `float brick = step(0.06, fract(uv.y * 14.0)) * step(0.04, fract(uv.x * 9.0 + step(0.5, fract(uv.y * 7.0)) * 0.5));
-    vec3 c = mix(vec3(0.035, 0.03, 0.04), vec3(0.10, 0.08, 0.09), brick * (0.6 + 0.4 * noise(uv * 40.0)));
-    float heat = 0.35 + 0.65 * uDrive, mouth = smoothstep(0.34, 0.0, length((p - vec2(0.0, -0.25)) * vec2(0.75, 1.3)));
-    c += vec3(1.0, 0.42, 0.08) * mouth * heat * (0.85 + 0.15 * sin(t * 9.0 + p.x * 5.0)) + vec3(1.0, 0.75, 0.3) * pow(mouth, 3.0) * heat;
-    c += vec3(1.0, 0.35, 0.05) * 0.10 * heat / (0.25 + dot(p, p)); c = mix(c, vec3(0.02), smoothstep(0.17, 0.12, uv.y));`,
-  // Jack Attack: low orbit — the curve of a planet below, a grid of distant stars, a slow aurora.
-  orbit: `vec3 c = mix(vec3(0.02, 0.01, 0.07), vec3(0.05, 0.03, 0.16), uv.y); vec2 sky = uv * vec2(128.0, 72.0); c += step(0.985, hash(floor(sky))) * smoothstep(0.45, 0.05, length(fract(sky) - 0.5)) * (0.55 + 0.45 * sin(t * 2.0 + hash(floor(sky)) * 60.0)) * vec3(0.9, 0.95, 1.0);
-    float aur = fbm(vec2(p.x * 1.5 + t * 0.03, p.y * 0.6)) * smoothstep(0.1, 0.8, uv.y); c += vec3(0.1, 0.8, 0.5) * aur * 0.16 + vec3(0.5, 0.2, 0.8) * aur * aur * 0.2;
-    float d = length(p - vec2(0.0, -3.1)); c = mix(c, mix(vec3(0.05, 0.25, 0.45), vec3(0.02, 0.06, 0.15), smoothstep(2.0, 2.45, d)), smoothstep(2.47, 2.44, d)); c += vec3(0.3, 0.7, 1.0) * 0.5 * smoothstep(0.08, 0.0, abs(d - 2.47));`,
-  // Lumberjack: a pine forest in morning light — trunks in three depths, shafts of sun, mist on the ground.
-  forest: `vec3 c = mix(vec3(0.62, 0.74, 0.55), vec3(0.20, 0.38, 0.36), smoothstep(0.1, 1.0, uv.y));
-    for (int i = 0; i < 3; i++) { float k = float(i), den = 5.0 + k * 4.0, x = uv.x * den + k * 1.7, id = floor(x), w = 0.16 + 0.12 * hash(vec2(id, k)), trunk = smoothstep(w, w - 0.04, abs(fract(x) - 0.5)) * step(0.35, hash(vec2(id, k + 5.0)));
-      c = mix(c, mix(vec3(0.30, 0.42, 0.36), vec3(0.10, 0.12, 0.10), k * 0.5) * (0.8 + 0.2 * noise(vec2(x * 3.0, uv.y * 30.0))), trunk * (0.45 + 0.27 * k)); }
-    c += vec3(1.0, 0.92, 0.65) * 0.22 * pow(max(0.0, sin(p.x * 3.0 - uv.y * 2.2 + 1.0)), 5.0) * uv.y; c = mix(c, vec3(0.80, 0.86, 0.78), smoothstep(0.22, 0.0, uv.y) * 0.55); c *= 0.78;`,
-  // Pulse: a neon tunnel flying at you in time — rings pass on the beat (uDrive = beats into the song), spokes run down
-  // the walls, the far end flares on every beat; uMood (0..1) turns it from cyan/magenta to gold: fever.
-  tunnel: `vec2 q = p - vec2(0.0, 0.13); float r = pow(pow(abs(q.x) * 0.6, 4.0) + pow(abs(q.y), 4.0), 0.25), z = 0.42 / (r + 0.03), beat = exp(-fract(uDrive) * 4.5);
-    // Thin, bright lines on near-black: neon is contrast. One bold ring every two beats, fine ones between, spokes down the walls.
-    float ring = smoothstep(0.462, 0.5, abs(fract(z * 0.5 - uDrive * 0.5) - 0.5)), thin = smoothstep(0.47, 0.5, abs(fract(z * 2.0 - uDrive * 2.0) - 0.5));
-    float ang = atan(q.y, q.x * 0.6) / 6.2832, spoke = smoothstep(0.474, 0.5, abs(fract(ang * 16.0) - 0.5)), near = smoothstep(0.04, 0.95, r);
-    vec3 cool = mix(vec3(0.0, 0.85, 1.0), vec3(1.0, 0.08, 0.75), 0.5 + 0.5 * sin(z * 0.55 - t * 0.35 + ang * 6.2832)), hot = mix(vec3(1.0, 0.72, 0.1), vec3(1.0, 0.95, 0.75), 0.5 + 0.5 * sin(z * 0.8 - t));
-    vec3 neon = mix(cool, hot, uMood), c = vec3(0.012, 0.006, 0.035) + neon * 0.018 * near;
-    c += neon * (ring * (0.95 + 0.9 * beat) + thin * 0.10 + spoke * (0.10 + 0.5 * ring)) * (0.25 + 0.75 * near);
-    c += neon * ring * 0.10 * near; // a little of each ring's light spills onto the wall around it
-    c += neon * (0.05 + 0.40 * beat) / (1.0 + 90.0 * r * r) + vec3(1.0) * beat * 0.22 / (1.0 + 500.0 * r * r); // the far end breathes with the kick
-    c *= 0.96 + 0.04 * sin(uv.y * 540.0);`,
-  // Wipe: what is under the grime — clean white tiles with a slow glint crossing them.
-  tiles: `vec2 g = fract(uv * vec2(16.0, 9.0)); float grout = smoothstep(0.0, 0.05, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
-    vec3 c = mix(vec3(0.35, 0.45, 0.55), vec3(0.78, 0.88, 0.95), grout) * (0.75 + 0.1 * hash(floor(uv * vec2(16.0, 9.0))));
-    c += vec3(0.25) * smoothstep(0.08, 0.0, abs(fract((p.x + p.y * 0.5) * 0.35 - t * 0.08) - 0.5)); c *= 0.62;`,
+
 };
 export type Place = keyof typeof PLACES;
 // ---- the Mirror look: the room itself is the world ---------------------------------------------------------------------
 // The whole camera picture, mirrored and fitted to the stage, pulled toward the game's two tones and darkened so that
 // everything the game draws reads as the light in the room; each player stands in a pool of their own light, and a
 // thick frame keeps the raw picture off the edge of the screen. No person mask needed: the cheapest look there is.
-const TONES: Partial<Record<Place, [string, string]>> = { deep: ['#031a2e', '#38bdf8'], sky: ['#2a1140', '#fdba74'] };
+const TONES: Partial<Record<Place, [string, string]>> = {};
 export const mirrorOn = () => tuning.look === 'mirror' && !sim && !!feed.video?.videoWidth;
 // Stage units per picture-height, and where a point of the picture (x in 0..aspect, y in 0..1, mirrored) lands on the stage.
 export const feedUnit = (aspect: number) => (aspect >= W / H ? H : W / aspect);

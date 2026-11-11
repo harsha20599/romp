@@ -2,19 +2,13 @@
 // Driven by hand, touch or keyboard. A tap or click during a game pauses it and offers the way home.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
-import { cutout, grip, measureDelay, perf, players, predict, record, setPlayers, sim, startPose, track, tuning } from './pose.ts';
-import { report } from './report.ts';
+import { grip, perf, players, setPlayers, sim, startPose, track, tuning } from './pose.ts';
 import { DAY_GOAL, load, save, summary, type Session } from './stats.ts';
 import { BADGES, CHALLENGE_XP, STAGES, badgesOf, bestScore, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, totalStars, unlockedStage, variantOf, xpOf } from './meta.ts';
 import { loadAudio } from './audio.ts';
-import { PLAYER_COLORS, Shell, audio, effects, jingle, paceSummary, play, say, sfx, type Playable } from './stage.tsx';
-// Each game is its own chunk: its code (and, for two of them, the physics engine) is fetched the first time it is played.
-const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('./games/run.ts')), Jab = play(() => import('./games/jab.ts')), Beat = play(() => import('./games/beat.ts'));
-const ShapeUp = play(() => import('./games/shapeup.ts')), Goalie = play(() => import('./games/goalie.ts')), Smash = play(() => import('./games/smash.ts'));
-const Sprint = play(() => import('./games/sprint.ts')), Forge = play(() => import('./games/forge.ts')), Jacks = play(() => import('./games/jacks.ts')), Lumber = play(() => import('./games/lumber.ts'));
-const Pulse = play(() => import('./games/pulse.ts'));
-const Leaks = play(() => import('./games/leaks.ts')), Keepy = play(() => import('./games/keepy.ts'));
-const Rocket = play(() => import('./games/rocket.ts')), Freeze = play(() => import('./games/freeze.ts')), Wipe = play(() => import('./games/wipe.ts'));
+import { PLAYER_COLORS, Shell, audio, effects, jingle, play, say, sfx, type Playable } from './stage.tsx';
+// The public demo includes two games, loaded on demand.
+const Slice = play(() => import('./games/slice.ts')), Run = play(() => import('./games/run.ts'));
 
 type GameMode = { id: string; name: string; blurb: string }; // id '' is the standard mode
 // `team`: the game knows how to be played by two as one team (a shared score); otherwise two players are always rivals.
@@ -22,29 +16,12 @@ type Game = { id: string; name: string; icon: string; tone: [string, string]; bl
 // The library. A new game = one component + one row here (+ its star goals in meta.ts). maxPlayers 2 only for
 // compact-footprint games (PLAN §3); a wide game is still playable by two through "Take turns".
 const GAMES: Game[] = [
-  { id: 'pulse', name: 'Pulse', icon: '🎧', tone: ['#22d3ee', '#c026d3'], blurb: 'Hit the music. A neon tunnel, three songs.', how: 'Notes fly down the tunnel onto two rings: cyan is your left hand, pink your right. You never aim. An arrow means swing that hand that way as it lands. A plain orb means swing it any way. A gold diamond means clap. A note with a tail means throw that arm up and hold it. In the break, duck the bar and lean away from the wall.', maxPlayers: 2, Play: Pulse, team: true,
-    modes: [{ id: '', name: 'Neon Drive', blurb: '112 bpm · the one to learn on' }, { id: 'afterglow', name: 'Afterglow', blurb: '124 bpm · quick doubles' }, { id: 'hyperline', name: 'Hyperline', blurb: '138 bpm · fast and relentless' }] },
   { id: 'run', name: 'Run', icon: '🏃', tone: ['#ff8a3d', '#ff3d6e'], blurb: 'Endless runner. Lean, jump, duck.', how: 'Lean left or right to change lane. Jump the barrels and duck the beams. Never run into a crate stack. Grab coins and power-ups in the lanes.', maxPlayers: 2, Play: Run },
   { id: 'slice', name: 'Slice', icon: '🍉', tone: ['#3ddc84', '#0e9aa7'], blurb: 'Cut the fruit, dodge the bombs.', how: 'Swipe fast through the fruit. One swing through three or more pays extra, and so does a really hard cut. Glowing bananas are power-ups. Never touch a bomb.', maxPlayers: 2, Play: Slice, team: true,
     modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, power-ups, bombs cost points' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Drop a fruit or hit a bomb and lose one' }, { id: 'zen', name: 'Zen', blurb: '90 calm seconds, no bombs. A good cool-down' }] },
-  { id: 'keepy', name: 'Keepy-Uppy', icon: '🎈', tone: ['#f472b6', '#7c3aed'], blurb: 'Keep the balloon off the floor.', how: 'Bump the balloon with anything. Headers, knees and kicks pay more than hands. Do not use the same part twice running. Together, pass it across the line: every crossing is a rally point.', maxPlayers: 2, Play: Keepy, team: true, crew: true,
-    modes: [{ id: '', name: 'Arcade', blurb: '60 seconds, more balloons, wind, and a storm to pop at the end' }, { id: 'classic', name: 'Classic', blurb: 'Three lives. Every balloon that lands costs one' }] },
-  { id: 'leaks', name: 'Leaks', icon: '💦', tone: ['#22d3ee', '#1d4ed8'], blurb: 'Plug the cracks with your whole body.', how: 'Cover a crack with a hand, a foot, a knee or your head. Hold it until the ring closes. Several open at once, so spread out. Do not let the water reach the top.', maxPlayers: 2, Play: Leaks, team: true, crew: true },
-  { id: 'sprint', name: 'Sprint', icon: '⚡', tone: ['#fb923c', '#be123c'], blurb: 'Knees up. Three heats, flat out.', how: 'Run on the spot with your knees up: your pace is your speed. Three 14-second heats with a breather between. Jump the hurdles, or throw both arms up to vault. The last heat pays double.', maxPlayers: 2, Play: Sprint, team: true },
-  { id: 'jacks', name: 'Jack Attack', icon: '👾', tone: ['#4ade80', '#0e7490'], blurb: 'Every jumping jack fires the cannon.', how: 'Each jumping jack shoots the lowest invader. Feet apart as well makes it a full jack: two shots. Arms alone still count, so stepping jacks are fine. Do not let them reach you. Breathe between waves.', maxPlayers: 2, Play: Jacks, team: true },
-  { id: 'forge', name: 'Forge', icon: '🔨', tone: ['#f59e0b', '#7f1d1d'], blurb: 'Hold the squat. Strike when it glows.', how: 'Sink into a squat and hold it to heat the blade. Deeper heats faster. When it glows white, drive up hard to strike. Rest while it is quenched. Every blade wants a longer hold.', maxPlayers: 2, Play: Forge, team: true },
-  { id: 'lumber', name: 'Lumberjack', icon: '🪓', tone: ['#65a30d', '#713f12'], blurb: 'Chop along the stripe.', how: 'Wind up high on one side and chop down across your body to the other, along the stripe on the log. Chop hard for a clean split. The stripe changes sides. Thick logs take two.', maxPlayers: 2, Play: Lumber, team: true },
-  { id: 'smash', name: 'Smash', icon: '📦', tone: ['#fbbf24', '#c2570c'], blurb: 'Knock the crate tower down.', how: 'Swing your hands through the crates. Knock every one off the platform. Clear it for a bonus and a taller tower.', maxPlayers: 2, Play: Smash },
-  { id: 'goalie', name: 'Goalie', icon: '🧤', tone: ['#38bdf8', '#2f55e0'], blurb: 'Get a hand to every shot.', how: 'The ring shows where the shot will land. Get a glove there in time. Swat it and it flies. Gold balls are fast and worth 3.', maxPlayers: 2, Play: Goalie },
-  { id: 'jab', name: 'Jab', icon: '🥊', tone: ['#ff5a76', '#a3154a'], blurb: 'Punch the pads, duck the bar.', how: 'Punch each pad with the hand on its side. Gold pads want the opposite hand. Punch hard for extra. Squat when the bar comes.', maxPlayers: 2, Play: Jab },
-  { id: 'beat', name: 'Beat', icon: '🎵', tone: ['#c084fc', '#6d28d9'], blurb: 'Hit the moves on the beat.', how: 'Hold the move as its shape reaches the line. Left hand up, right hand up, both up, squat, or jump. On the beat is Perfect.', maxPlayers: 2, Play: Beat },
-  { id: 'rocket', name: 'Rocket', icon: '🚀', tone: ['#818cf8', '#3b2fb0'], blurb: 'Every squat is a burn.', how: 'Squat to fire the engine. Deeper squats burn harder. Stop and gravity wins. Highest altitude is your score.', maxPlayers: 2, Play: Rocket },
-  { id: 'freeze', name: 'Freeze', icon: '🧊', tone: ['#67e8f9', '#0f7f9c'], blurb: 'Dance, then hold dead still.', how: 'Move as much as you can while the music plays. When it stops, freeze. Any wobble costs points. A still freeze pays a bonus.', maxPlayers: 2, Play: Freeze },
-  { id: 'wipe', name: 'Wipe', icon: '🧽', tone: ['#fde047', '#d97706'], blurb: 'Scrub the screen clean.', how: 'Sweep both hands across the grime. It creeps back, so keep moving. Clear your whole side for a bonus and a tougher layer.', maxPlayers: 2, Play: Wipe },
-  { id: 'shapeup', name: 'Shape Up', icon: '🤸', tone: ['#fb7185', '#b0186a'], blurb: 'Match the pose in time.', how: 'A shape flies toward you. Make it with your whole body before it lands. Needs room for both arms, so play solo or take turns.', maxPlayers: 1, Play: ShapeUp },
 ];
 const NAMES = Object.fromEntries(GAMES.map((g) => [g.id, g.name]));
-const BADGE_ICON: Record<string, string> = { first: '👟', explorer: '🧭', century: '💯', double: '🔥', streak3: '📅', streak7: '🗓️', streak30: '⚡', stars10: '⭐', stars40: '🌟', stars100: '🌌', flawless: '💎', summit: '🏔️', five: '🖐️', level5: '💪', level10: '🏅', early: '🌅', squats: '🦵', runner: '🏁' };
+const BADGE_ICON: Record<string, string> = { first: '👟', explorer: '🧭', century: '💯', double: '🔥', streak3: '📅', streak7: '🗓️', streak30: '⚡', stars10: '⭐', stars20: '🌟', stars30: '🌌', flawless: '💎', summit: '🏔️', five: '🖐️', level5: '💪', level10: '🏅', early: '🌅', runner: '🏁' };
 
 const MODES = { solo: 'Solo', together: 'Together', turns: 'Take turns' } as const;
 type Mode = keyof typeof MODES;
@@ -146,7 +123,6 @@ function Confetti() {
 // hands when the other is clearly higher, and once on a button it sticks until it leaves by a margin — closing a fist
 // shifts the palm a little, and that must not slide you off the button you were aiming at.
 const DWELL = 1500, STICKY = 40, BLIND_AFTER = 4000;
-const POINTER_LEAD = 0.06; // seconds of prediction the menu pointer takes. Games take ~0.2; a pointer that runs ahead and falls back feels pulled about.
 const pressMode = () => { try { return localStorage.getItem('romp.press') === 'hold' ? 'hold' : 'fist'; } catch { return 'fist'; } };
 function HandCursor() {
   const el = useRef<HTMLDivElement>(null);
@@ -175,7 +151,7 @@ function HandCursor() {
       el.current!.style.display = on ? '' : 'none';
       if (!on) return void ((x = NaN), (shownAt = 0));
       shownAt ||= now;
-      const at = predict(hand, undefined, POINTER_LEAD), tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight;
+      const at = hand, tx = ((at.x + 1) / 2) * innerWidth, ty = ((1 - at.y) / 2) * innerHeight;
       // Gentle when it is nearly there (a hand held over a button must not shiver), quick when there is ground to cover.
       const k = Number.isNaN(x) ? 1 : 1 - Math.exp(-dt * (7 + 26 * Math.min(1, Math.hypot(tx - x, ty - y) / (innerHeight * 0.14))));
       x = (Number.isNaN(x) ? tx : x) + (tx - (Number.isNaN(x) ? tx : x)) * k;
@@ -315,31 +291,12 @@ function App() {
     try { await startPose(video.current!); } catch (e) {
       return setError(`Camera or tracker failed: ${(e as Error).message}. Allow the camera — and if this is the http://192.168… address, add it under chrome://flags → “Insecure origins treated as secure” first.`);
     }
-    setTimeout(() => report('tracker'), 15000); // once the numbers have settled
     go({ at: 'home' });
   };
-  // Ten seconds of raw tracker output, sent to the build machine: the filters get tuned against the real player.
-  const [taping, setTaping] = useState('');
-  // The screen flashes for ~12s (slowly — about twice a second) while the camera watches the room; see measureDelay.
-  const [delay, setDelay] = useState('');
-  const calibrate = async () => {
-    setDelay('Measuring…');
-    const ms = await measureDelay(video.current!);
-    if (ms === null) return setDelay('Could not see the screen light the room. Dim the lights or stand closer, and try again.');
-    report('delay', { ms });
-    setTracker('romp.unseen', String(ms));
-  };
-  const tape = async () => {
-    setTaping('Recording — wave, slice, punch, then hold still…');
-    report('tape', await record(12));
-    setTaping('Sent. Thank you!');
-  };
-
   // Two people on stage play as one team where the game knows how; what they score is then kept apart from solo scores.
   const teamOf = (game: Game) => n === 2 && !!game.team && (coop || !!game.crew);
   const finish = (run: Round, gameScores: number[], gameNotes: string[][] = []) => {
     const team = teamOf(run.game), variant = variantOf(run.mode, team);
-    report('round', { game: run.game.id, stage: run.stage, mode: run.mode, team, players: n, glow: effects.on, look: tuning.look, cutMs: +cutout.ms.toFixed(1), cutDropped: cutout.dropped, ...paceSummary() });
     const earned = gameScores.map((_, i) => Math.round((players[i].energy - energy0.current[i]) / tuning.energyPerPoint));
     const scores = [...run.scores, ...gameScores], points = [...run.points, ...earned], notes = [...run.notes, ...gameScores.map((_, i) => gameNotes[i] ?? [])];
     if (mode === 'turns' && run.turn === 0) return go({ ...run, at: 'next', turn: 1, scores, points, notes });
@@ -389,7 +346,8 @@ function App() {
       {screen.at === 'start' && (
         <div className="screen" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '2rem' }}>
           <Logo huge />
-          <h2>Your body is the controller. Move to play.</h2>
+          <h2>Romp Demo · Run and Slice</h2>
+          <p className="dim">Two motion games with basic camera tracking.</p>
           <div className="row" style={{ justifyContent: 'center' }}>
             {['📺 Stand the tablet under the TV', '🚶 Step back till your whole body shows', '✊ Point at a button, close your fist to press'].map((t) => <span className="goal" key={t}>{t}</span>)}
           </div>
@@ -400,7 +358,7 @@ function App() {
       {screen.at === 'home' && (
         <div className="screen">
           <div className="row">
-            <Logo />
+            <Logo /><span className="pill">Demo</span>
             <p className="dim num grow" style={{ paddingLeft: '1rem' }}><Fps /></p>
             <button className="ghost" onClick={toggleFx}>✨ Glow {fx ? 'on' : 'off'}</button>
             <button className="ghost" onClick={() => go({ at: 'tracking' })}>🎯 Tracking</button>
@@ -543,16 +501,7 @@ function App() {
             <p className="num"><Fps /></p>
             <p className="dim num">Camera {track.camera || '—'}</p>
             <p className="dim num"><TrackerDetail /></p>
-            <p className="dim">Hold a hand still: the yellow scribble behind the dot is the tracking noise. Wave fast: a smeared, lagging trail means motion blur — add light, or try Sharp motion.</p>
-            <div className="row">
-              <span className="label">Your look</span>
-              <div className="seg">
-                <button aria-pressed={tuning.look === 'shadow'} onClick={() => setTracker('romp.look', 'shadow')}>Shadow</button>
-                <button aria-pressed={tuning.look === 'camera'} onClick={() => setTracker('romp.look', 'camera')}>Camera</button>
-                <button aria-pressed={tuning.look === 'mirror'} onClick={() => setTracker('romp.look', 'mirror')}>Mirror</button>
-              </div>
-              <span className="dim">In full-body games. Shadow: you as a figure of light, hands and feet glowing — free, and the same for two players. Camera: your own picture lifted out of the room (one player; costs the tracker speed, and switches back to Shadow by itself if it cannot keep up). Mirror: the game played over your whole room, dimmed, with you in the light.</span>
-            </div>
+            <p className="dim">This demo uses basic camera tracking. Hold a hand still to see tracking noise; add light if fast movements blur.</p>
             <div className="row">
               <span className="label">Model</span>
               <div className="seg">
@@ -567,40 +516,6 @@ function App() {
                 <button aria-pressed={pressMode() === 'hold'} onClick={() => setTracker('romp.press', 'hold')}>Hold still</button>
               </div>
               <span className="dim">Close your fist over a button.</span>
-            </div>
-            <div className="row">
-              <span className="label">Sharp motion</span>
-              <div className="seg">
-                <button aria-pressed={!tuning.sharp} onClick={() => setTracker('romp.sharp', 'off')}>Off</button>
-                <button aria-pressed={tuning.sharp} onClick={() => setTracker('romp.sharp', 'on')}>On</button>
-              </div>
-              <span className="dim">Caps the shutter at 16 ms: less blur, steady 30 fps.</span>
-            </div>
-            <div className="row">
-              <span className="label">Camera speed</span>
-              <div className="seg">
-                <button aria-pressed={tuning.fastCam} onClick={() => setTracker('romp.cam', 'fastest')}>Fastest</button>
-                <button aria-pressed={!tuning.fastCam} onClick={() => setTracker('romp.cam', 'standard')}>Standard</button>
-              </div>
-              <span className="dim">60 fps, if the camera can.</span>
-            </div>
-            <div className="row">
-              <span className="label">Frames</span>
-              <div className="seg">
-                <button aria-pressed={tuning.direct} onClick={() => setTracker('romp.frames', 'direct')}>Direct</button>
-                <button aria-pressed={!tuning.direct} onClick={() => setTracker('romp.frames', 'copied')}>Copied</button>
-              </div>
-              <span className="dim">Compare the ms above.</span>
-            </div>
-            <div className="row">
-              <span className="label">Delay</span>
-              <button onClick={calibrate}>Measure ({Math.round(tuning.unseen * 1000)} ms)</button>
-              <span className="dim">{delay || 'Screen + camera delay. The screen will flash slowly for 12 s.'}</span>
-            </div>
-            <div className="row">
-              <span className="label">Tuning</span>
-              <button disabled={taping.startsWith('Rec')} onClick={tape}>Record 12 s</button>
-              <span className="dim">{taping || 'Sends raw tracking to the build machine.'}</span>
             </div>
           </div>
         </div>

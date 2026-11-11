@@ -1,11 +1,9 @@
 // The one runnable check: `npm run check`. Fails if the input maths or the streak logic breaks.
 import assert from 'node:assert/strict';
-import { assignSlots, frameClock, handInZone, isAir, isLow, palm, predict, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { assignSlots, frameClock, handInZone, isAir, isLow, palm, leanOf, limbAngles, OneEuro, poseMatch, tuning } from './pose.ts';
 import { summary, DAY_GOAL } from './stats.ts';
-import { chart } from './chart.ts';
-import { SONGS } from './song.ts';
-import { chopper, jacker, squatDepth, stepper } from './reps.ts';
-import { badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, variantOf, xpOf } from './meta.ts';
+import { STARS, STAGES, BADGES, badgesOf, bestStars, dailyChallenges, levelOf, sessionXp, starGoals, starsFor, unlockedStage, variantOf, xpOf } from './meta.ts';
 
 // A body: shoulders 0.1 apart (camera frame, aspect 1) centred at cx, wrists wherever we put them.
 const body = (cx: number, sw = 0.1, wrist = { x: cx, y: 0.5 }) => {
@@ -53,36 +51,6 @@ assert.ok(spread < 0.02 / 3, `jitter only reduced to ${spread}`);
 for (let k = 0; k < 30; k++) out = fast.next(k / 10, 1 / 30); // 3 zone-units per second
 assert.ok(2.9 - out < 0.25, `lagging ${2.9 - out} behind a fast hand`);
 
-// Prediction: a hand moving right at 4 units/s, read 70ms ago, is drawn ahead of its reading — but never past maxLead.
-const moving = { x: 0, y: 0, vx: 4, vy: 0, ax: 0, ay: 0, seen: true, t: 1000 };
-assert.ok(Math.abs(predict(moving, 1070).x - 4 * (0.07 + tuning.unseen)) < 1e-9);
-assert.ok(Math.abs(predict(moving, 9000).x - 4 * tuning.maxLead) < 1e-9);
-assert.equal(predict({ ...moving, vx: 0.4 }, 1070).x, 0); // a hand that is barely moving is left exactly where it was read: no wobble
-assert.ok(Math.abs(predict({ ...moving, ax: -30 - tuning.brakeFrom }, 1070).x - 4 * 4 / 30 / 2) < 1e-9); // braking hard: carried to where it would stop (v²/2a), not 0.76 away
-assert.equal(predict({ ...moving, ax: -tuning.brakeFrom * 0.9 }, 1070).x, predict(moving, 1070).x); // noise-sized deceleration changes nothing
-assert.ok(Math.abs(predict(moving, 1070, 0.06).x - 4 * 0.06) < 1e-9); // a pointer asks for less lead
-
-// The whole chain on a slicing hand: a full there-and-back swing every 1.7s, seen 30 times a second with tracker noise, judged against
-// where the hand really is 200ms after each frame was taken. Prediction must beat drawing the stale reading, and the
-// braking limit must beat plain straight-line extrapolation where it matters — the overshoot at each turn.
-{
-  const L = 0.2, fx = new OneEuro(() => tuning.handCalm, () => tuning.handQuick), truth = (t: number) => 0.8 * Math.sin(2 * Math.PI * 0.6 * t);
-  let seed = 7; const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.012;
-  const err = { stale: 0, line: 0, braked: 0 }, worst = { line: 0, braked: 0 };
-  for (let k = 0; k < 300; k++) {
-    const t = k / 30, x = fx.next(truth(t) + noise(), 1 / 30), hand = { x, y: 0, vx: fx.v, vy: 0, ax: fx.ddx, ay: 0, seen: true, t: t * 1000 };
-    if (k < 30) continue;
-    const want = truth(t + L), at = (h: typeof hand) => predict(h, t * 1000 + L * 1000 - tuning.unseen * 1000).x; // total lead = L
-    const e = { stale: x - want, line: at({ ...hand, ax: 0 }) - want, braked: at(hand) - want };
-    for (const key of ['stale', 'line', 'braked'] as const) err[key] += e[key] ** 2;
-    worst.line = Math.max(worst.line, Math.abs(e.line)); worst.braked = Math.max(worst.braked, Math.abs(e.braked));
-  }
-  const rms = (v: number) => Math.sqrt(v / 270);
-  console.log(`prediction over 200ms on a slicing hand — rms error: stale ${rms(err.stale).toFixed(3)}, straight-line ${rms(err.line).toFixed(3)}, braked ${rms(err.braked).toFixed(3)}; worst: straight-line ${worst.line.toFixed(3)}, braked ${worst.braked.toFixed(3)}`);
-  assert.ok(rms(err.braked) < rms(err.stale) * 0.6, 'prediction should recover about half of a 200ms lag'); // the rest needs curvature — a tape-tuned job
-  assert.ok(rms(err.braked) <= rms(err.line) && worst.braked <= worst.line, 'braking limit should not be worse than a straight line');
-}
-
 // The palm: a blend of wrist and knuckles, so one noisy point moves it by only its share; hidden points drop out.
 const hand = body(0.5);
 hand[19] = { ...hand[19], x: 0.6 };
@@ -100,9 +68,9 @@ assert.equal(summary([at(0, 30)], 'B').total, 0);
 assert.equal(summary([at(0, 30), at(6, 30), at(8, 30)], 'A').week, 60);
 
 // Progression: stars come from score vs stage goals; two stars open the next stage; XP and levels follow.
-assert.deepEqual(starGoals('beat', 1), [25, 50, 80]);
-assert.equal(starsFor('beat', 1, 60), 2);
-assert.ok(starGoals('beat', 3)[0] > 25);
+assert.deepEqual(starGoals('slice', 1), [40, 80, 130]);
+assert.equal(starsFor('slice', 1, 100), 2);
+assert.ok(starGoals('slice', 3)[0] > 40);
 // Variants: a mode has its own goals, a team is asked for 1.8x, and neither opens the standard mode's stages.
 assert.deepEqual(starGoals('slice', 1, 'classic'), [30, 70, 120]);
 assert.deepEqual(starGoals('slice', 1, 'team'), starGoals('slice', 1).map((v) => Math.round(v * 1.8)));
@@ -113,16 +81,19 @@ const played = (game: string, stage: number, score: number, points = 40, daysAgo
   const stars = starsFor(game, stage, score);
   return { t: Date.now() - daysAgo * 864e5, game, who: 'A', score, points, stage, stars, xp: sessionXp({ points, stars, stage, newBest: false }) };
 };
-const log = [played('beat', 1, 60), played('beat', 2, 10), played('jab', 1, 5)];
-assert.equal(bestStars(log, 'A', 'beat', 1), 2);
-assert.equal(unlockedStage(log, 'A', 'beat'), 2); // 2 stars on stage 1 opens stage 2, but stage 2 has none yet
-assert.equal(unlockedStage(log, 'A', 'jab'), 1);
-assert.equal(unlockedStage([...log, { ...played('jab', 1, 500), variant: 'team' }], 'A', 'jab'), 1); // a team round's stars are the team variant's
-assert.equal(unlockedStage([...log, { ...played('jab', 1, 500), variant: 'team' }], 'A', 'jab', 'team'), 2);
-assert.equal(summary([{ ...played('jab', 1, 500), variant: 'team' }], 'A').best.jab, undefined); // and its score is not your solo best
+const log = [played('slice', 1, 100), played('slice', 2, 10), played('run', 1, 5)];
+assert.equal(bestStars(log, 'A', 'slice', 1), 2);
+assert.equal(unlockedStage(log, 'A', 'slice'), 2); // 2 stars on stage 1 opens stage 2, but stage 2 has none yet
+assert.equal(unlockedStage(log, 'A', 'run'), 1);
+assert.equal(unlockedStage([...log, { ...played('run', 1, 1000), variant: 'team' }], 'A', 'run'), 1); // a team round's stars are the team variant's
+assert.equal(unlockedStage([...log, { ...played('run', 1, 1000), variant: 'team' }], 'A', 'run', 'team'), 2);
+assert.equal(summary([{ ...played('run', 1, 1000), variant: 'team' }], 'A').best.run, undefined); // and its score is not your solo best
 assert.equal(xpOf(log, 'A'), 40 + 40 + 40 + 40 + 10); // three sessions' points, two stars, one stage-2 bonus
 assert.deepEqual([levelOf(0).level, levelOf(59).level, levelOf(60).level, levelOf(240).level], [1, 1, 2, 3]);
-assert.ok(badgesOf(log, 'A').includes('first') && badgesOf(log, 'A').includes('century') && !badgesOf(log, 'A').includes('explorer'));
+assert.ok(badgesOf(log, 'A').includes('first') && badgesOf(log, 'A').includes('century') && badgesOf(log, 'A').includes('explorer'));
+assert.ok(!badgesOf([played('slice', 1, 100, 99)], 'A').includes('century'));
+assert.ok(badgesOf([played('slice', 1, 100, 100)], 'A').includes('century'));
+assert.ok(!badgesOf(log.filter((s) => s.game === 'slice'), 'A').includes('explorer'));
 const daily = dailyChallenges(log, 'A', {});
 assert.equal(daily.length, 3);
 assert.deepEqual(daily.map((c) => c.id), dailyChallenges([], 'B', {}).map((c) => c.id)); // same three for everyone, all day
@@ -152,72 +123,28 @@ assert.ok(daily[0].have === Math.min(daily[0].goal, 120));
   assert.ok(!isAir(at(-0.4, 3))); // driving up out of a squat is not a jump
 }
 
-// Pointing at a button: drift over at a walking pace, then hold. The menu pointer (capped lead) must not be noisier
-// than the smoothed reading itself, and must not run on past where the hand stopped.
-{
-  const fx = new OneEuro(() => tuning.handCalm, () => tuning.handQuick); let seed = 11; const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.012;
-  const truth = (t: number) => Math.min(0.5, t * 0.9);
-  let jitterRaw = 0, jitterPointer = 0, past = 0, prevX = 0, prevP = 0;
-  for (let k = 0; k < 150; k++) {
-    const t = k / 30, x = fx.next(truth(t) + noise(), 1 / 30), p = predict({ x, y: 0, vx: fx.v, vy: 0, ax: fx.ddx, ay: 0, seen: true, t: t * 1000 }, t * 1000 + 60, 0.06).x;
-    if (t > 1) { jitterRaw += Math.abs(x - prevX); jitterPointer += Math.abs(p - prevP); past = Math.max(past, p - 0.5); }
-    prevX = x; prevP = p;
-  }
-  assert.ok(jitterPointer <= jitterRaw * 1.2 + 1e-9, `pointer wobbles more than the hand reading: ${jitterPointer} vs ${jitterRaw}`);
-  assert.ok(past < 0.02, `pointer ran ${past} past the spot the hand stopped at`);
+// The public demo must offer only playable games, goals, and attainable badges.
+assert.deepEqual(Object.keys(STARS).sort(), ['run', 'slice']);
+assert.deepEqual(readdirSync(new URL('./games/', import.meta.url)).sort(), ['run.ts', 'slice.ts']);
+const shell = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+assert.deepEqual([...shell.matchAll(/import\('\.\/games\/([^']+)\.ts'\)/g)].map((m) => m[1]).sort(), ['run', 'slice']);
+const maxStars = Object.keys(STARS).length * STAGES * 3;
+const completed = Object.keys(STARS).flatMap((game) => Array.from({ length: STAGES }, (_, i) => played(game, i + 1, 100000)));
+assert.ok(badgesOf(completed, 'A').includes('explorer'));
+for (const badge of BADGES.filter((b) => b.id.startsWith('stars'))) {
+  assert.ok(Number(badge.id.slice(5)) <= maxStars);
+  assert.ok(badgesOf(completed, 'A').includes(badge.id));
 }
-
-// ---- exercise detectors: a rep that does not count is the worst bug an exercise game can have --------------------------
-{
-  const body = (o: { knee?: [number, number]; wrists?: number; feet?: number } = {}) => {
-    const rig = Array.from({ length: 33 }, () => [0, 0, 1, 0, 0]);
-    rig[23] = [-0.3, -1.6, 1]; rig[24] = [0.3, -1.6, 1];
-    rig[25] = [-0.32, -2.75 + (o.knee?.[0] ?? 0), 1]; rig[26] = [0.32, -2.75 + (o.knee?.[1] ?? 0), 1];
-    rig[27] = [-(o.feet ?? 0.35), -3.8, 1]; rig[28] = [o.feet ?? 0.35, -3.8, 1];
-    rig[15] = [-0.9, o.wrists ?? -1.2, 1]; rig[16] = [0.9, o.wrists ?? -1.2, 1];
-    return rig;
-  };
-  // Running on the spot at 3 steps a second, knees coming up a modest 0.45 shoulder-widths: every step counts, none twice.
-  const run = stepper(); let steps = 0, pace = 0;
-  for (let f = 0; f < 60; f++) run(body(), f / 30); // standing first: it learns the legs
-  for (let f = 0; f < 300; f++) { const t = 2 + f / 30, phase = (t * 1.5) % 1, lift = Math.max(0, Math.sin(phase * 2 * Math.PI)) * 0.45, other = Math.max(0, Math.sin((phase + 0.5) * 2 * Math.PI)) * 0.45; const r = run(body({ knee: [lift, other] }), t); steps += r.steps; pace = r.cadence; }
-  assert.ok(Math.abs(steps - 30) <= 1, `10s at 3 steps/s counted ${steps}`);
-  assert.ok(pace > 2.4 && pace < 3.6, `cadence ${pace}`);
-  let idle = 0; const still = stepper(); for (let f = 0; f < 300; f++) idle += still(body({ knee: [Math.sin(f) * 0.04, 0] }), f / 30).steps; // jitter is not running
-  assert.equal(idle, 0);
-  // Ten jacks, arms only, then the same with feet apart: ten reps each, and only the second kind is "wide".
-  const jack = jacker(); let reps = 0, wides = 0;
-  for (const feet of [0.35, 0.9]) for (let f = 0; f < 300; f++) { const up = Math.sin((f / 30) * 2 * Math.PI) > 0; const r = jack(body({ wrists: up ? 1.6 : -1.2, feet: up ? feet : 0.35 })); if (r.rep) { reps++; if (r.wide) wides++; } }
-  assert.equal(reps, 20); assert.equal(wides, 10);
-  // A chop from top-left to bottom-right in 0.3s is one chop toward the right; a slow drift down the same path is none.
-  const chop = chopper(); let chops: number[] = [];
-  for (let f = 0; f <= 9; f++) { const k = f / 9, r = chop([{ x: -0.6 + 1.2 * k, y: 0.8 - 1.4 * k, vy: 0, seen: true }], f / 30); if (r) chops.push(r.dir); }
-  assert.deepEqual(chops, [1]);
-  const lazy = chopper(); chops = [];
-  for (let f = 0; f <= 60; f++) { const k = f / 60, r = lazy([{ x: -0.6 + 1.2 * k, y: 0.8 - 1.4 * k, vy: 0, seen: true }], f / 30 * 1.2); if (r) chops.push(r.dir); }
-  assert.deepEqual(chops, []);
-  assert.equal(squatDepth(0), 0); assert.equal(squatDepth(-0.85), 1); assert.ok(squatDepth(-0.6) > 0.5 && squatDepth(-0.6) < 0.6);
-}
-
-// ---- Pulse: charts are made from the songs, and must be playable by a body ------------------------------------------------
-for (const song of SONGS) {
-  let fewer = 0;
-  for (let stage = 1; stage <= 5; stage++) {
-    const { notes, seconds } = chart(song, stage), moves = notes.filter((n) => n.kind !== 'duck' && n.kind !== 'lean');
-    assert.ok(seconds > 55 && seconds < 95, `${song.name} lasts ${seconds}s`);
-    assert.ok(moves.length > fewer, `${song.name} stage ${stage}: ${moves.length} notes, not more than stage ${stage - 1}`); fewer = moves.length - 1;
-    assert.ok(notes.every((n, i) => !i || n.t >= notes[i - 1].t), 'in time order');
-    assert.ok(moves.every((n) => Math.abs(Math.hypot(n.dx, n.dy) - 1) < 1e-9 || (n.dx === 0 && n.dy === 0)), 'a direction is a unit vector, or none');
-    for (const h of [0, 1]) {
-      const mine = moves.filter((n) => n.hand === h || n.hand === 2);
-      assert.ok(mine.every((n, i) => !i || n.t - (mine[i - 1].t + mine[i - 1].len) > 0.2), `${song.name} stage ${stage}: a hand is never asked twice inside 0.2s`);
-      assert.ok(mine.length > moves.length * 0.3, 'both hands share the work');
-      // The same sideways swing twice running would need an unseen return stroke in between: only allowed with room for it.
-      const side = mine.filter((n) => n.kind === 'swipe' && n.dx !== 0 && n.hand === h);
-      assert.ok(side.every((n, i) => !i || n.dx !== side[i - 1].dx || n.t - side[i - 1].t > 0.9), `${song.name} stage ${stage}: sideways swipes alternate`);
-    }
-    assert.ok(notes.some((n) => n.kind === 'duck'), 'the break has gates'); assert.equal(notes.some((n) => n.kind === 'hold'), stage >= 2);
-  }
+// Every day must be completable using only the two demo games, even with old game history.
+for (let day = 1; day <= 366; day++) {
+  const now = new Date(2026, 0, day, 12).getTime();
+  const games = Object.keys(STARS).flatMap((game) => [0, 1].map(() => ({ ...played(game, 1, 100000, 100), t: now })));
+  const quests = dailyChallenges([], 'A', {}, now);
+  assert.equal(quests.length, 3);
+  assert.ok(quests.every((q) => !q.id.includes('stars:') || Object.keys(STARS).some((g) => q.id.endsWith(`stars:${g}`))));
+  assert.ok(dailyChallenges(games, 'A', {}, now).every((q) => q.done), `unreachable quest on day ${day}`);
+  const legacy = [{ ...played('removed-game', 1, 100000), t: now }];
+  assert.ok(dailyChallenges(legacy, 'A', {}, now).filter((q) => q.id.endsWith(':variety')).every((q) => q.have === 0));
 }
 
 console.log('ok');

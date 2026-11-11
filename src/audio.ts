@@ -14,8 +14,6 @@ export function audio() {
   return ctx;
 }
 
-export const musicOut = () => (audio(), musicBus); // where a song (song.ts) plugs in: same bus, same compressor, same pause
-
 const buffers = new Map<string, AudioBuffer[]>();
 export async function loadAudio() {
   const index: Record<string, string[]> = await (await fetch('/assets/audio.json')).json();

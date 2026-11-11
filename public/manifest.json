@@ -1,6 +1,6 @@
 {
-  "name": "Romp",
-  "short_name": "Romp",
+  "name": "Romp Demo",
+  "short_name": "Romp Demo",
   "start_url": "/",
   "display": "fullscreen",
   "orientation": "landscape",

@@ -1,7 +1,7 @@
 // What every game shares: the round clock, sound, the players' hands, bursts, and the small geometry of hit-testing.
 // (The React shell that mounts a game lives in stage.tsx; nothing here touches React.)
 import type { Entity, GraphNode } from 'playcanvas';
-import { cutout, playerCount, players, predict, sim, track, tuning, wantCutout } from './pose.ts';
+import { cutout, playerCount, players, sim, tuning, wantCutout } from './pose.ts';
 import { CUT } from './cut.ts';
 import { blip, say, sfx, whoosh } from './audio.ts';
 import { BODY_JOINTS, H, W, bodyLook, cutoutLook, feedUnit, flat, glowLook, instanced, node, mirrorOn, refreshCutouts, ribbon, shapes, show, trailLook, type Scene, type View } from './engine.ts';
@@ -27,10 +27,6 @@ export type Hud = ((key: HudKey, text: string) => void) & {
 // slowed during a hit-stop). An optional `view` asks for a perspective camera; the default is the flat 16×9 stage.
 export type Game = GameProps & { hud: Hud; scene: Scene; cleanup: (fn: () => void) => void };
 export type GameModule = { default: (game: Game) => Promise<(dt: number) => void> | ((dt: number) => void); view?: View };
-
-// How long ago the player actually did what the game is only now seeing: measured frame-to-tracker age, plus the
-// measured delay the page cannot see (camera pipeline + screen). Timing games judge against the past by this much.
-export const inputLag = () => (sim ? 0 : Math.max(0.06, Math.min(0.4, track.lag / 1000 + tuning.unseen)));
 
 // A player's zone on the orthographic stage: the whole width solo, a half each together.
 export const zoneHalf = (n: number) => W / 2 / n;
@@ -138,11 +134,10 @@ export function hands(scene: Scene, n: number, map: HandMap = { cx: (p) => zoneX
       if (!s.on) return s;
       // The camera updates ~30x a second, the screen 60x: glide toward the latest reading so motion is continuous,
       // and take speed from the tracker (measured at camera rate) — never from per-frame screen deltas.
-      // …and the reading is already old when it arrives, so aim at where the hand is by now (pose.ts predict).
       // How hard to chase the tracker depends on how far behind we are: close to it (a still or slow hand) the dot
       // moves gently, so tracker noise — and the 20-odd readings a second arriving as little steps — never shows;
       // far from it (a real swing) it goes almost at once. Steady at rest, immediate in motion.
-      const at = predict(hand), tx = map.cx(s.p) + at.x * map.hw, ty = (map.cy ?? 0) + at.y * map.hh, far = was ? Math.hypot(tx - s.x, ty - s.y) : 0;
+      const at = hand, tx = map.cx(s.p) + at.x * map.hw, ty = (map.cy ?? 0) + at.y * map.hh, far = was ? Math.hypot(tx - s.x, ty - s.y) : 0;
       const k = was ? 1 - Math.exp(-dt * (11 + 36 * Math.min(1, far / 1.1))) : 1;
       s.px = was ? s.x : tx;
       s.py = was ? s.y : ty;
